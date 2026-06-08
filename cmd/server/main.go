@@ -10,11 +10,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/gofiber/fiber/v3/middleware/static"
 	"gopkg.in/yaml.v3"
 )
 
@@ -207,6 +207,8 @@ func main() {
 		log.Fatal("timelapse name must not be empty")
 	}
 
+	os.MkdirAll("./videos", 0755)
+
 	stopChan := make(chan struct{})
 	defer close(stopChan)
 
@@ -215,10 +217,27 @@ func main() {
 
 	app := fiber.New()
 
-	app.Use("/static/*", static.New("./packages"))
+	app.Get("/static/*", func(c fiber.Ctx) error {
+		path := c.Params("*")
+		if strings.Contains(path, "..") {
+			return c.Status(400).SendString("invalid path")
+		}
+
+		fullPath := filepath.Join("./packages", path)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			return c.SendFile(fullPath)
+		}
+
+		fullPath = filepath.Join("./videos", path)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			return c.SendFile(fullPath)
+		}
+
+		return c.Status(404).SendString("not found")
+	})
 
 	app.Get("/", func(c fiber.Ctx) error {
-		return c.SendString(`<a href="/api/v1/preview">Preview</a><br><a href="/api/v1/photo">Photo</a><br><a href="/api/v1/timelapse">Timelapse Packages</a>`)
+		return c.SendString(`<a href="/api/v1/preview">Preview</a><br><a href="/api/v1/photo">Photo</a><br><a href="/api/v1/timelapse">Timelapse Packages</a><br><a href="/api/v1/video?t=10">Video (10s)</a><br><a href="/api/v1/videos">Videos</a>`)
 	})
 
 	app.Get("/api/v1/preview", func(c fiber.Ctx) error {
@@ -257,6 +276,67 @@ func main() {
 
 		c.Set("Content-Type", "image/jpeg")
 		return c.Send(data)
+	})
+
+	app.Get("/api/v1/video", func(c fiber.Ctx) error {
+		tStr := c.Query("t", "10")
+		t, err := strconv.Atoi(tStr)
+		if err != nil || t <= 0 {
+			return c.Status(400).SendString("invalid duration")
+		}
+
+		id := fmt.Sprintf("%d", time.Now().UnixNano())
+		filename := fmt.Sprintf("video_%s.mp4", id)
+
+		async := c.Query("async", "false") == "true"
+
+		var outputPath string
+		if async {
+			outputPath = filepath.Join("./videos", filename)
+		} else {
+			outputPath = filename
+		}
+
+		cmd := exec.Command("rpicam-vid", "-t", fmt.Sprintf("%ds", t), "--codec", "libav", "-o", outputPath)
+		if err := cmd.Run(); err != nil {
+			return c.Status(500).SendString(fmt.Sprintf("video capture failed: %v", err))
+		}
+
+		if async {
+			c.Set("Content-Type", "application/json")
+			return c.JSON(fiber.Map{"url": "/static/" + filename})
+		}
+
+		defer os.Remove(filename)
+
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			return c.Status(500).SendString(fmt.Sprintf("failed to read video: %v", err))
+		}
+
+		c.Set("Content-Type", "video/mp4")
+		return c.Send(data)
+	})
+
+	app.Get("/api/v1/videos", func(c fiber.Ctx) error {
+		videosDir := "./videos"
+		entries, err := os.ReadDir(videosDir)
+		if err != nil {
+			return c.JSON(fiber.Map{"videos": []string{}})
+		}
+
+		var urls []string
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasSuffix(name, ".mp4") {
+				urls = append(urls, "/static/"+name)
+			}
+		}
+		sort.Strings(urls)
+		return c.JSON(fiber.Map{"videos": urls})
 	})
 
 	app.Get("/api/v1/timelapse", func(c fiber.Ctx) error {

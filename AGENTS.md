@@ -10,6 +10,7 @@ Go web server providing a REST API to capture photos via Raspberry Pi camera mod
 |---------|---------|
 | `go run ./cmd/server` | Run server locally (requires Go 1.26) |
 | `go run ./cmd/client --server <url>` | Run client locally |
+| `go run ./cmd/client --server <url> --keep` | Run client and keep working dir for resume |
 | `go build -o ./bin/server ./cmd/server` | Build server binary |
 | `go build -o ./bin/client ./cmd/client` | Build client binary |
 | `go mod tidy` | Sync dependencies |
@@ -44,11 +45,32 @@ Key difference between endpoints:
 - **Preview**: `--timeout 2000 --width 640 --height 480`
 - **Photo**: no extra flags (full sensor resolution)
 
+### Client Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-server` | `http://raspberrypi.local/` | Server base URL |
+| `-output-dir` | `.` | Output directory for generated videos |
+| `-work-dir` | `./timelapse_work` | Working directory for downloads and frames |
+| `-fps` | `30` | Frames per second for output video |
+| `-keep` | `false` | Keep working directory after encoding |
+| `-state` | `timelapse_state.json` | Path to state file tracking processed packages |
+
 ### Timelapse Flow
 
 1. Background goroutine captures photos every configured period to `./timelapse`.
 2. Background packager runs every minute, bundling photos older than 5s into `.tar.gz` archives in `./packages`.
-3. Client queries `/api/v1/timelapse`, downloads archives, unpacks them, and uses `ffmpeg` to generate a video.
+3. Client queries `/api/v1/timelapse`, downloads archives, groups them by name prefix, unpacks them, and uses `ffmpeg` to generate a video per group.
+
+#### Grouping
+
+Packages are grouped based on the filename prefix before the last underscore:
+- `timelapse_window_122.tar.gz` → `window.mp4`
+- `timelapse_plants_02.tar.gz`, `timelapse_plants_03.tar.gz` → `plants.mp4`
+
+#### Resume / State Tracking
+
+The client maintains a state file (`timelapse_state.json` by default) that records which packages have already been downloaded and extracted. On subsequent runs, already-processed packages are skipped. Use `-keep` to preserve the working directory (frames) between runs so that resumed sessions include all historical frames in the final video.
 
 ## Code Style & Conventions
 

@@ -18,18 +18,54 @@ import (
 	"time"
 )
 
+type State struct {
+	Packages map[string]bool `json:"packages"`
+}
+
+func loadState(path string) (*State, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &State{Packages: make(map[string]bool)}, nil
+		}
+		return nil, err
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, err
+	}
+	if s.Packages == nil {
+		s.Packages = make(map[string]bool)
+	}
+	return &s, nil
+}
+
+func (s *State) save(path string) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
 func main() {
 	serverURL := flag.String("server", "http://raspberrypi.local/", "Server base URL (e.g. http://192.168.1.100:8080)")
-	output := flag.String("output", "timelapse.mp4", "Output video file path")
+	outputDir := flag.String("output-dir", ".", "Output directory for generated videos")
 	workDir := flag.String("work-dir", "./timelapse_work", "Working directory for downloads and frames")
 	fps := flag.Int("fps", 30, "Frames per second for output video")
 	keep := flag.Bool("keep", false, "Keep working directory after encoding")
+	stateFile := flag.String("state", "timelapse_state.json", "Path to state file tracking downloaded packages")
 	flag.Parse()
 
 	server := strings.TrimSuffix(*serverURL, "/")
 
 	if err := os.MkdirAll(*workDir, 0755); err != nil {
 		log.Fatalf("failed to create work dir: %v", err)
+	}
+
+	state, err := loadState(*stateFile)
+	if err != nil {
+		log.Fatalf("failed to load state: %v", err)
 	}
 
 	packages, err := fetchPackageList(server)
@@ -41,30 +77,85 @@ func main() {
 		return
 	}
 
-	log.Printf("found %d package(s)", len(packages))
+	groups := groupPackages(packages)
+	log.Printf("found %d package(s) in %d group(s)", len(packages), len(groups))
 
-	framesDir := filepath.Join(*workDir, "frames")
-	if err := os.MkdirAll(framesDir, 0755); err != nil {
-		log.Fatalf("failed to create frames dir: %v", err)
+	groupNames := make([]string, 0, len(groups))
+	for name := range groups {
+		groupNames = append(groupNames, name)
 	}
+	sort.Strings(groupNames)
 
-	for _, pkg := range packages {
-		if err := downloadAndExtract(server, pkg, *workDir, framesDir); err != nil {
-			log.Printf("failed to process %s: %v", pkg, err)
+	for _, group := range groupNames {
+		framesDir := filepath.Join(*workDir, "frames", group)
+		if err := os.MkdirAll(framesDir, 0755); err != nil {
+			log.Fatalf("failed to create frames dir for %s: %v", group, err)
 		}
-	}
 
-	if err := encodeVideo(framesDir, *output, *fps); err != nil {
-		log.Fatalf("failed to encode video: %v", err)
-	}
+		newPackages := false
+		for _, pkg := range groups[group] {
+			if state.Packages[pkg] {
+				log.Printf("skipping already processed %s", pkg)
+				continue
+			}
+			if err := downloadAndExtract(server, pkg, *workDir, framesDir); err != nil {
+				log.Printf("failed to process %s: %v", pkg, err)
+				continue
+			}
+			state.Packages[pkg] = true
+			if err := state.save(*stateFile); err != nil {
+				log.Printf("failed to save state: %v", err)
+			}
+			newPackages = true
+		}
 
-	log.Printf("video saved to %s", *output)
+		if !newPackages {
+			entries, err := os.ReadDir(framesDir)
+			if err != nil || len(entries) == 0 {
+				log.Printf("no frames for %s, skipping encoding", group)
+				continue
+			}
+		}
+
+		outputPath := filepath.Join(*outputDir, group+".mp4")
+		if err := encodeVideo(framesDir, outputPath, *fps); err != nil {
+			log.Printf("failed to encode video for %s: %v", group, err)
+			continue
+		}
+		log.Printf("video saved to %s", outputPath)
+	}
 
 	if !*keep {
 		if err := os.RemoveAll(*workDir); err != nil {
 			log.Printf("failed to clean up work dir: %v", err)
 		}
 	}
+}
+
+func groupPackages(packages []string) map[string][]string {
+	groups := make(map[string][]string)
+	for _, pkg := range packages {
+		group := extractGroup(pkg)
+		groups[group] = append(groups[group], pkg)
+	}
+	for group := range groups {
+		sort.Strings(groups[group])
+	}
+	return groups
+}
+
+func extractGroup(pkgPath string) string {
+	basename := path.Base(pkgPath)
+	if !strings.HasPrefix(basename, "timelapse_") || !strings.HasSuffix(basename, ".tar.gz") {
+		return "timelapse"
+	}
+	stripped := strings.TrimPrefix(basename, "timelapse_")
+	stripped = strings.TrimSuffix(stripped, ".tar.gz")
+	parts := strings.Split(stripped, "_")
+	if len(parts) < 2 {
+		return stripped
+	}
+	return strings.Join(parts[:len(parts)-1], "_")
 }
 
 func fetchPackageList(server string) ([]string, error) {
