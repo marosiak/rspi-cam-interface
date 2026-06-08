@@ -297,7 +297,7 @@ func main() {
 			outputPath = filename
 		}
 
-		cmd := exec.Command("rpicam-vid", "-t", fmt.Sprintf("%ds", t), "--codec", "libav", "-o", outputPath)
+		cmd := exec.Command("rpicam-vid", "-t", fmt.Sprintf("%d", t), "--codec", "libav", "-o", outputPath)
 		if err := cmd.Run(); err != nil {
 			return c.Status(500).SendString(fmt.Sprintf("video capture failed: %v", err))
 		}
