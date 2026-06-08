@@ -37,7 +37,10 @@ func loadConfig(path string) (Config, error) {
 
 func capturePhoto(outputPath string) error {
 	cmd := exec.Command("rpicam-jpeg", "--output", outputPath)
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", cmd.String(), err)
+	}
+	return nil
 }
 
 func nextPackageNumber(packagesDir, timelapseName string) int {
