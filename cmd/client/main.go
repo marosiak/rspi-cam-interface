@@ -19,16 +19,13 @@ import (
 )
 
 func main() {
-	serverURL := flag.String("server", "", "Server base URL (e.g. http://192.168.1.100:8080)")
+	serverURL := flag.String("server", "http://raspberrypi.local/", "Server base URL (e.g. http://192.168.1.100:8080)")
 	output := flag.String("output", "timelapse.mp4", "Output video file path")
 	workDir := flag.String("work-dir", "./timelapse_work", "Working directory for downloads and frames")
 	fps := flag.Int("fps", 30, "Frames per second for output video")
 	keep := flag.Bool("keep", false, "Keep working directory after encoding")
 	flag.Parse()
 
-	if *serverURL == "" {
-		log.Fatal("--server is required")
-	}
 	server := strings.TrimSuffix(*serverURL, "/")
 
 	if err := os.MkdirAll(*workDir, 0755); err != nil {
@@ -171,6 +168,11 @@ func extractTarGz(archivePath, destDir string) error {
 }
 
 func encodeVideo(framesDir, output string, fps int) error {
+	encoder, err := findH264Encoder()
+	if err != nil {
+		return err
+	}
+
 	entries, err := os.ReadDir(framesDir)
 	if err != nil {
 		return err
@@ -200,18 +202,40 @@ func encodeVideo(framesDir, output string, fps int) error {
 		}
 	}
 
-	log.Printf("encoding %d frames at %d fps", len(frames), fps)
+	log.Printf("encoding %d frames at %d fps using %s", len(frames), fps, encoder)
 	pattern := filepath.Join(framesDir, "frame_%06d.jpg")
 	cmd := exec.Command("ffmpeg",
 		"-y",
 		"-framerate", fmt.Sprintf("%d", fps),
 		"-i", pattern,
-		"-c:v", "libx264",
+		"-c:v", encoder,
 		"-pix_fmt", "yuv420p",
+		"-vf", "scale=1920:-2",
 		"-movflags", "+faststart",
 		output,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func findH264Encoder() (string, error) {
+	preferred := []string{"libx264", "h264_nvenc", "h264_amf", "h264_qsv", "h264_vaapi", "libopenh264", "h264_v4l2m2m"}
+	out, err := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to query ffmpeg encoders: %w", err)
+	}
+	available := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			available[fields[1]] = true
+		}
+	}
+	for _, enc := range preferred {
+		if available[enc] {
+			return enc, nil
+		}
+	}
+	return "", fmt.Errorf("no H.264 encoder found in ffmpeg")
 }
