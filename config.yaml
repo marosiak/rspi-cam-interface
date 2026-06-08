@@ -1,0 +1,3 @@
+timelapse:
+  period: 5s
+  name: window

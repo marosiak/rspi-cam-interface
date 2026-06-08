@@ -1,0 +1,110 @@
+camera:
+  # Image dimensions (0 = use default)
+  width: 0
+  height: 0
+
+  # Flips and rotation
+  vflip: false
+  hflip: false
+  rotation: 0
+
+  # Preview window
+  no_preview: false
+  fullscreen: false
+  qt_preview: false
+  preview: ""
+  preview_libs: ""
+
+  # Image processing
+  brightness: 0
+  contrast: null
+  saturation: null
+  sharpness: null
+  denoise: auto
+
+  # Exposure
+  exposure: normal
+  metering: centre
+  ev: null
+  shutter: 0
+  analog_gain: null
+  gain: null
+  framerate: null
+  flicker_period: ""
+
+  # White balance
+  awb: auto
+  awb_gains: ""
+  ccm: ""
+
+  # Quality
+  quality: null
+
+  # Region of interest (digital zoom)
+  roi: ""
+
+  # Focus
+  autofocus_mode: default
+  autofocus_range: normal
+  autofocus_speed: normal
+  autofocus_window: ""
+  lens_position: ""
+  autofocus_on_capture: false
+
+  # HDR
+  hdr: off
+
+  # Metadata
+  metadata: ""
+  metadata_format: json
+
+  # Capture timing
+  timeout: ""
+  timelapse: ""
+  framestart: 0
+  datetime: false
+  timestamp: false
+  keypress: false
+  signal: false
+  restart: 0
+  immediate: false
+  zsl: false
+
+  # Thumbnail
+  thumb: ""
+
+  # Encoding
+  encoding: jpg
+  raw: false
+
+  # Post-processing
+  post_process_file: ""
+  post_process_libs: ""
+
+  # Camera hardware
+  camera: 0
+  tuning_file: ""
+  mode: ""
+  viewfinder_mode: ""
+  viewfinder_width: 0
+  viewfinder_height: 0
+  lores_width: 0
+  lores_height: 0
+  lores_par: false
+  buffer_count: 0
+  viewfinder_buffer_count: 0
+  no_raw: false
+
+  # EXIF
+  exif: ""
+
+  # Info text overlay
+  info_text: ""
+
+  # Output options
+  latest: ""
+  wrap: 0
+  flush: false
+
+  # Verbosity (0 = silent, 1 = default, 2 = verbose)
+  verbose: null
