@@ -41,6 +41,20 @@ else
   echo "config.yaml copied."
 fi
 
+# Copy camera config with override prompt
+if [ -f "${INSTALL_DIR}/camera.yaml" ]; then
+  read -p "camera.yaml already exists in ${INSTALL_DIR}. Override? [y/N]: " answer
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    cp ./camera.yaml "${INSTALL_DIR}/camera.yaml"
+    echo "camera.yaml updated."
+  else
+    echo "camera.yaml kept."
+  fi
+else
+  cp ./camera.yaml "${INSTALL_DIR}/camera.yaml"
+  echo "camera.yaml copied."
+fi
+
 # Create working subdirectories
 mkdir -p "${INSTALL_DIR}/timelapse"
 mkdir -p "${INSTALL_DIR}/packages"
@@ -60,7 +74,7 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/server --cfg ${INSTALL_DIR}/config.yaml
+ExecStart=${INSTALL_DIR}/server --cfg ${INSTALL_DIR}/config.yaml --camera-cfg ${INSTALL_DIR}/camera.yaml
 Restart=always
 RestartSec=15
 AmbientCapabilities=CAP_NET_BIND_SERVICE
