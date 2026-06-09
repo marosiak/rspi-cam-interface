@@ -19,6 +19,11 @@ fi
 # Create install directory
 mkdir -p "${INSTALL_DIR}"
 
+# Stop the service if it's running so the binary can be replaced
+if systemctl is-active --quiet "${SERVICE_NAME}"; then
+  systemctl stop "${SERVICE_NAME}"
+fi
+
 # Copy binary
 cp ./bin/server "${INSTALL_DIR}/server"
 
