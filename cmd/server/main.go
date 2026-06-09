@@ -23,6 +23,10 @@ type Config struct {
 		Period time.Duration `yaml:"period"`
 		Name   string        `yaml:"name"`
 	} `yaml:"timelapse"`
+	Camera struct {
+		VFlip bool `yaml:"vflip"`
+		HFlip bool `yaml:"hflip"`
+	} `yaml:"camera"`
 }
 
 func loadConfig(path string) (Config, error) {
@@ -35,8 +39,20 @@ func loadConfig(path string) (Config, error) {
 	return cfg, err
 }
 
-func capturePhoto(outputPath string) error {
-	cmd := exec.Command("rpicam-jpeg", "--output", outputPath)
+func cameraArgs(cfg Config, base ...string) []string {
+	args := append([]string{}, base...)
+	if cfg.Camera.VFlip {
+		args = append(args, "--vflip")
+	}
+	if cfg.Camera.HFlip {
+		args = append(args, "--hflip")
+	}
+	return args
+}
+
+func capturePhoto(cfg Config, outputPath string) error {
+	args := cameraArgs(cfg, "--output", outputPath)
+	cmd := exec.Command("rpicam-jpeg", args...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", cmd.String(), err)
 	}
@@ -172,7 +188,7 @@ func startTimelapse(cfg Config, stopChan <-chan struct{}) {
 			id := time.Now().UnixNano()
 			filename := fmt.Sprintf("%s_%d.jpg", cfg.Timelapse.Name, id)
 			outputPath := filepath.Join("./timelapse", filename)
-			if err := capturePhoto(outputPath); err != nil {
+			if err := capturePhoto(cfg, outputPath); err != nil {
 				log.Printf("timelapse capture failed: %v", err)
 			}
 		case <-stopChan:
@@ -247,7 +263,8 @@ func main() {
 		id := fmt.Sprintf("%d", time.Now().UnixNano())
 		filename := fmt.Sprintf("preview_%s.jpg", id)
 
-		cmd := exec.Command("rpicam-jpeg", "--output", filename, "--timeout", "2000", "--width", "640", "--height", "480")
+		args := cameraArgs(cfg, "--output", filename, "--timeout", "2000", "--width", "640", "--height", "480")
+		cmd := exec.Command("rpicam-jpeg", args...)
 		if err := cmd.Run(); err != nil {
 			return c.Status(500).SendString(fmt.Sprintf("camera capture failed: %v", err))
 		}
@@ -266,7 +283,8 @@ func main() {
 		id := fmt.Sprintf("%d", time.Now().UnixNano())
 		filename := fmt.Sprintf("photo_%s.jpg", id)
 
-		cmd := exec.Command("rpicam-jpeg", "--output", filename)
+		args := cameraArgs(cfg, "--output", filename)
+		cmd := exec.Command("rpicam-jpeg", args...)
 		if err := cmd.Run(); err != nil {
 			return c.Status(500).SendString(fmt.Sprintf("camera capture failed: %v", err))
 		}
@@ -301,6 +319,12 @@ func main() {
 		}
 
 		cmd := exec.Command("rpicam-vid", "-t", fmt.Sprintf("%d", t), "--codec", "libav", "-o", outputPath)
+		if cfg.Camera.VFlip {
+			cmd.Args = append(cmd.Args, "--vflip")
+		}
+		if cfg.Camera.HFlip {
+			cmd.Args = append(cmd.Args, "--hflip")
+		}
 		if err := cmd.Run(); err != nil {
 			return c.Status(500).SendString(fmt.Sprintf("video capture failed: %v", err))
 		}
