@@ -10,23 +10,17 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Build binary for Raspberry Pi
-if [ -f "build-rspi.sh" ]; then
-    ./build-rspi.sh
-else
-    GOOS=linux GOARCH=arm GOARM=6 go build -o ./bin/server ./cmd/server
+# Use already built binary
+if [ ! -f "./bin/server" ]; then
+    echo "Error: ./bin/server not found. Please build the binary first."
+    exit 1
 fi
 
 # Create install directory
 mkdir -p "${INSTALL_DIR}"
 
 # Copy binary
-if [ -f "./bin/server" ]; then
-    cp ./bin/server "${INSTALL_DIR}/server"
-else
-    echo "Error: ./bin/server not found. Build failed?"
-    exit 1
-fi
+cp ./bin/server "${INSTALL_DIR}/server"
 
 # Copy config with override prompt
 if [ -f "${INSTALL_DIR}/config.yaml" ]; then
