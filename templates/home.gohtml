@@ -3,14 +3,469 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rspi timelapse</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <title>Rspi Timelapse Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-<body class="bg-gray-100 text-gray-800">
+<body class="bg-base-200 min-h-screen">
 
-<div class="max-w-xl mx-auto p-6 mt-10 bg-white rounded-lg shadow-lg">
-    <h1 class="text-3xl font-bold text-center mb-6">{{.Title}}</h1>
+<div class="max-w-7xl mx-auto p-4">
+    <div class="flex flex-col lg:flex-row gap-4">
+        <!-- Preview Panel -->
+        <div class="lg:w-1/2 flex flex-col gap-4">
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title text-2xl">Live Preview</h2>
+                    <div class="relative bg-base-300 rounded-lg overflow-hidden" style="min-height: 480px;">
+                        <img id="preview" src="" alt="Camera preview" class="w-full h-full object-contain" style="max-height: 480px;">
+                        <div id="preview-loading" class="absolute inset-0 flex items-center justify-center bg-base-300/80">
+                            <span class="loading loading-spinner loading-lg"></span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center mt-2">
+                        <span id="preview-status" class="text-sm text-base-content/70">Loading...</span>
+                        <button onclick="refreshPreview()" class="btn btn-sm btn-outline">Refresh</button>
+                    </div>
+                </div>
+            </div>
 
+            <!-- Timelapse Info -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title text-xl">Timelapse</h2>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="form-control">
+                            <span class="label-text">Period</span>
+                            <input type="text" id="timelapse-period" class="input input-sm input-bordered" placeholder="5s">
+                        </label>
+                        <label class="form-control">
+                            <span class="label-text">Name</span>
+                            <input type="text" id="timelapse-name" class="input input-sm input-bordered" placeholder="window">
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Config Panel -->
+        <div class="lg:w-1/2">
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <div class="flex justify-between items-center mb-2">
+                        <h2 class="card-title text-2xl">Camera Settings</h2>
+                        <div class="flex gap-2">
+                            <button onclick="revertConfig()" class="btn btn-sm btn-warning">Revert</button>
+                            <button onclick="saveConfig()" class="btn btn-sm btn-primary">Save</button>
+                        </div>
+                    </div>
+                    <div id="save-status" class="text-sm mb-2 h-5"></div>
+
+                    <!-- Tabs -->
+                    <div class="tabs tabs-lifted mb-2">
+                        <button class="tab tab-active" onclick="showTab(this, 'tab-general')">General</button>
+                        <button class="tab" onclick="showTab(this, 'tab-exposure')">Exposure</button>
+                        <button class="tab" onclick="showTab(this, 'tab-focus')">Focus</button>
+                        <button class="tab" onclick="showTab(this, 'tab-advanced')">Advanced</button>
+                    </div>
+
+                    <!-- Tab: General -->
+                    <div id="tab-general" class="tab-content space-y-2">
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Width</span><input type="number" id="camera-width" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Height</span><input type="number" id="camera-height" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Rotation</span><input type="number" id="camera-rotation" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Camera Index</span><input type="number" id="camera-camera" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-vflip" class="checkbox checkbox-sm"><span class="label-text">VFlip</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-hflip" class="checkbox checkbox-sm"><span class="label-text">HFlip</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-no_preview" class="checkbox checkbox-sm"><span class="label-text">No Preview</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-fullscreen" class="checkbox checkbox-sm"><span class="label-text">Fullscreen</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-qt_preview" class="checkbox checkbox-sm"><span class="label-text">Qt Preview</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-immediate" class="checkbox checkbox-sm"><span class="label-text">Immediate</span></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Preview</span><input type="text" id="camera-preview" class="input input-sm input-bordered" placeholder="x,y,w,h"></label>
+                            <label class="form-control"><span class="label-text">Preview Libs</span><input type="text" id="camera-preview_libs" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Brightness</span><input type="number" step="any" id="camera-brightness" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Contrast</span><input type="number" step="any" id="camera-contrast" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Saturation</span><input type="number" step="any" id="camera-saturation" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Sharpness</span><input type="number" step="any" id="camera-sharpness" class="input input-sm input-bordered"></label>
+                        </div>
+                        <label class="form-control"><span class="label-text">Denoise</span>
+                            <select id="camera-denoise" class="select select-sm select-bordered">
+                                <option value="">(default)</option>
+                                <option value="auto">auto</option>
+                                <option value="off">off</option>
+                                <option value="cdn_off">cdn_off</option>
+                                <option value="cdn_fast">cdn_fast</option>
+                                <option value="cdn_hq">cdn_hq</option>
+                            </select>
+                        </label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Quality</span><input type="number" id="camera-quality" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Encoding</span>
+                                <select id="camera-encoding" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="jpg">jpg</option>
+                                    <option value="png">png</option>
+                                    <option value="rgb">rgb</option>
+                                    <option value="rgb24">rgb24</option>
+                                    <option value="rgb48">rgb48</option>
+                                    <option value="bmp">bmp</option>
+                                    <option value="yuv420">yuv420</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Exposure -->
+                    <div id="tab-exposure" class="tab-content hidden space-y-2">
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Exposure Mode</span>
+                                <select id="camera-exposure" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="normal">normal</option>
+                                    <option value="sport">sport</option>
+                                </select>
+                            </label>
+                            <label class="form-control"><span class="label-text">Metering</span>
+                                <select id="camera-metering" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="centre">centre</option>
+                                    <option value="spot">spot</option>
+                                    <option value="average">average</option>
+                                    <option value="custom">custom</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">EV</span><input type="number" id="camera-ev" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Shutter</span><input type="number" id="camera-shutter" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Analog Gain</span><input type="number" step="any" id="camera-analog_gain" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Gain</span><input type="number" step="any" id="camera-gain" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Framerate</span><input type="number" step="any" id="camera-framerate" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Flicker Period</span><input type="text" id="camera-flicker_period" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">AWB</span>
+                                <select id="camera-awb" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="auto">auto</option>
+                                    <option value="incandescent">incandescent</option>
+                                    <option value="tungsten">tungsten</option>
+                                    <option value="fluorescent">fluorescent</option>
+                                    <option value="indoor">indoor</option>
+                                    <option value="daylight">daylight</option>
+                                    <option value="cloudy">cloudy</option>
+                                    <option value="custom">custom</option>
+                                </select>
+                            </label>
+                            <label class="form-control"><span class="label-text">AWB Gains</span><input type="text" id="camera-awb_gains" class="input input-sm input-bordered" placeholder="r,b"></label>
+                        </div>
+                        <label class="form-control"><span class="label-text">CCM</span><input type="text" id="camera-ccm" class="input input-sm input-bordered"></label>
+                        <label class="form-control"><span class="label-text">ROI</span><input type="text" id="camera-roi" class="input input-sm input-bordered" placeholder="x,y,w,h"></label>
+                    </div>
+
+                    <!-- Tab: Focus -->
+                    <div id="tab-focus" class="tab-content hidden space-y-2">
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Autofocus Mode</span>
+                                <select id="camera-autofocus_mode" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="default">default</option>
+                                    <option value="manual">manual</option>
+                                    <option value="auto">auto</option>
+                                    <option value="continuous">continuous</option>
+                                </select>
+                            </label>
+                            <label class="form-control"><span class="label-text">Autofocus Range</span>
+                                <select id="camera-autofocus_range" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="normal">normal</option>
+                                    <option value="macro">macro</option>
+                                    <option value="full">full</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Autofocus Speed</span>
+                                <select id="camera-autofocus_speed" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="normal">normal</option>
+                                    <option value="fast">fast</option>
+                                </select>
+                            </label>
+                            <label class="form-control"><span class="label-text">Lens Position</span><input type="text" id="camera-lens_position" class="input input-sm input-bordered"></label>
+                        </div>
+                        <label class="form-control"><span class="label-text">Autofocus Window</span><input type="text" id="camera-autofocus_window" class="input input-sm input-bordered" placeholder="x,y,w,h"></label>
+                        <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-autofocus_on_capture" class="checkbox checkbox-sm"><span class="label-text">Autofocus on Capture</span></label>
+                    </div>
+
+                    <!-- Tab: Advanced -->
+                    <div id="tab-advanced" class="tab-content hidden space-y-2">
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">HDR</span>
+                                <select id="camera-hdr" class="select select-sm select-bordered">
+                                    <option value="">(default)</option>
+                                    <option value="off">off</option>
+                                    <option value="auto">auto</option>
+                                    <option value="sensor">sensor</option>
+                                    <option value="single-exp">single-exp</option>
+                                </select>
+                            </label>
+                            <label class="form-control"><span class="label-text">Metadata</span><input type="text" id="camera-metadata" class="input input-sm input-bordered" placeholder="filename or -"></label>
+                        </div>
+                        <label class="form-control"><span class="label-text">Metadata Format</span>
+                            <select id="camera-metadata_format" class="select select-sm select-bordered">
+                                <option value="">(default)</option>
+                                <option value="json">json</option>
+                                <option value="txt">txt</option>
+                            </select>
+                        </label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Timeout</span><input type="text" id="camera-timeout" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Timelapse</span><input type="text" id="camera-timelapse" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Framestart</span><input type="number" id="camera-framestart" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Restart</span><input type="number" id="camera-restart" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-datetime" class="checkbox checkbox-sm"><span class="label-text">Datetime</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-timestamp" class="checkbox checkbox-sm"><span class="label-text">Timestamp</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-keypress" class="checkbox checkbox-sm"><span class="label-text">Keypress</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-signal" class="checkbox checkbox-sm"><span class="label-text">Signal</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-raw" class="checkbox checkbox-sm"><span class="label-text">Raw</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-zsl" class="checkbox checkbox-sm"><span class="label-text">ZSL</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-flush" class="checkbox checkbox-sm"><span class="label-text">Flush</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-lores_par" class="checkbox checkbox-sm"><span class="label-text">Lores PAR</span></label>
+                            <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="camera-no_raw" class="checkbox checkbox-sm"><span class="label-text">No Raw</span></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Thumb</span><input type="text" id="camera-thumb" class="input input-sm input-bordered" placeholder="w:h:q or none"></label>
+                            <label class="form-control"><span class="label-text">EXIF</span><input type="text" id="camera-exif" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Info Text</span><input type="text" id="camera-info_text" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Latest</span><input type="text" id="camera-latest" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Wrap</span><input type="number" id="camera-wrap" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Verbose</span><input type="number" id="camera-verbose" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Viewfinder Width</span><input type="number" id="camera-viewfinder_width" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Viewfinder Height</span><input type="number" id="camera-viewfinder_height" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Lores Width</span><input type="number" id="camera-lores_width" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Lores Height</span><input type="number" id="camera-lores_height" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Buffer Count</span><input type="number" id="camera-buffer_count" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">VF Buffer Count</span><input type="number" id="camera-viewfinder_buffer_count" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Post Process File</span><input type="text" id="camera-post_process_file" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Post Process Libs</span><input type="text" id="camera-post_process_libs" class="input input-sm input-bordered"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Tuning File</span><input type="text" id="camera-tuning_file" class="input input-sm input-bordered"></label>
+                            <label class="form-control"><span class="label-text">Mode</span><input type="text" id="camera-mode" class="input input-sm input-bordered" placeholder="W:H:bits:P/U"></label>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="form-control"><span class="label-text">Viewfinder Mode</span><input type="text" id="camera-viewfinder_mode" class="input input-sm input-bordered" placeholder="W:H:bits:P/U"></label>
+                            <label class="form-control"><span class="label-text">CCM</span><input type="text" id="camera-ccm" class="input input-sm input-bordered"></label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
+
+<script>
+let currentConfig = null;
+let lastSavedConfig = null;
+
+const CAMERA_BOOLS = [
+    'vflip','hflip','no_preview','fullscreen','qt_preview','flush','lores_par','no_raw',
+    'datetime','timestamp','keypress','signal','raw','immediate','autofocus_on_capture','zsl'
+];
+
+const CAMERA_INTS = [
+    'camera','width','height','rotation','shutter','ev','wrap',
+    'viewfinder_width','viewfinder_height','lores_width','lores_height',
+    'buffer_count','viewfinder_buffer_count','framestart','restart','quality','verbose'
+];
+
+const CAMERA_FLOATS = [
+    'analog_gain','gain','brightness','contrast','saturation','sharpness','framerate'
+];
+
+const CAMERA_STRINGS = [
+    'info_text','post_process_file','post_process_libs','preview','preview_libs','roi',
+    'metering','exposure','awb','awb_gains','ccm','denoise','tuning_file','mode',
+    'viewfinder_mode','autofocus_mode','autofocus_range','autofocus_speed','autofocus_window',
+    'lens_position','hdr','metadata','metadata_format','exif','thumb','encoding','latest',
+    'flicker_period','timeout','timelapse'
+];
+
+function showTab(btn, tabId) {
+    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('tab-active'));
+    btn.classList.add('tab-active');
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+    document.getElementById(tabId).classList.remove('hidden');
+}
+
+function setField(id, val) {
+    const el = document.getElementById('camera-' + id);
+    if (!el) return;
+    if (el.type === 'checkbox') {
+        el.checked = !!val;
+    } else {
+        el.value = val !== null && val !== undefined ? val : '';
+    }
+}
+
+function getField(id) {
+    const el = document.getElementById('camera-' + id);
+    if (!el) return null;
+    if (el.type === 'checkbox') {
+        return el.checked;
+    }
+    const v = el.value.trim();
+    if (v === '') return null;
+    if (el.type === 'number') {
+        return el.step === 'any' ? parseFloat(v) : parseInt(v, 10);
+    }
+    return v;
+}
+
+function populateForm(cfg) {
+    if (cfg.config) {
+        document.getElementById('timelapse-period').value = cfg.config.timelapse?.period || '';
+        document.getElementById('timelapse-name').value = cfg.config.timelapse?.name || '';
+    }
+    if (cfg.camera) {
+        const cam = cfg.camera;
+        CAMERA_BOOLS.forEach(k => setField(k, cam[k]));
+        CAMERA_INTS.forEach(k => setField(k, cam[k]));
+        CAMERA_FLOATS.forEach(k => setField(k, cam[k]));
+        CAMERA_STRINGS.forEach(k => setField(k, cam[k]));
+    }
+}
+
+function collectForm() {
+    const config = {
+        timelapse: {
+            period: document.getElementById('timelapse-period').value || '5s',
+            name: document.getElementById('timelapse-name').value || 'window'
+        }
+    };
+    const camera = {};
+    CAMERA_BOOLS.forEach(k => { const v = getField(k); if (v !== null) camera[k] = v; });
+    CAMERA_INTS.forEach(k => { const v = getField(k); if (v !== null) camera[k] = v; });
+    CAMERA_FLOATS.forEach(k => { const v = getField(k); if (v !== null) camera[k] = v; });
+    CAMERA_STRINGS.forEach(k => { const v = getField(k); if (v !== null) camera[k] = v; });
+    return { config, camera };
+}
+
+function setStatus(msg, type) {
+    const el = document.getElementById('save-status');
+    el.textContent = msg;
+    el.className = 'text-sm mb-2 h-5 ' + (type === 'error' ? 'text-error' : type === 'success' ? 'text-success' : 'text-info');
+}
+
+async function loadConfig() {
+    try {
+        const resp = await fetch('/api/v1/config');
+        const data = await resp.json();
+        currentConfig = data;
+        // Try to load last saved from localStorage first
+        const saved = localStorage.getItem('lastConfig');
+        if (saved) {
+            lastSavedConfig = JSON.parse(saved);
+        } else {
+            lastSavedConfig = JSON.parse(JSON.stringify(data));
+        }
+        populateForm(data);
+        setStatus('Config loaded', 'info');
+    } catch (e) {
+        setStatus('Failed to load config: ' + e.message, 'error');
+    }
+}
+
+async function saveConfig() {
+    const payload = collectForm();
+    try {
+        const resp = await fetch('/api/v1/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            currentConfig = payload;
+            lastSavedConfig = JSON.parse(JSON.stringify(payload));
+            localStorage.setItem('lastConfig', JSON.stringify(lastSavedConfig));
+            setStatus('Saved successfully', 'success');
+        } else {
+            setStatus('Error: ' + (data.error || 'unknown'), 'error');
+        }
+    } catch (e) {
+        setStatus('Failed to save: ' + e.message, 'error');
+    }
+}
+
+function revertConfig() {
+    if (lastSavedConfig) {
+        populateForm(lastSavedConfig);
+        setStatus('Reverted to last saved', 'info');
+    } else {
+        setStatus('No saved config to revert', 'error');
+    }
+}
+
+function refreshPreview() {
+    const img = document.getElementById('preview');
+    const loading = document.getElementById('preview-loading');
+    const status = document.getElementById('preview-status');
+    loading.classList.remove('hidden');
+    status.textContent = 'Loading...';
+    img.src = '/api/v1/photo?' + Date.now();
+}
+
+function setupPreview() {
+    const img = document.getElementById('preview');
+    const loading = document.getElementById('preview-loading');
+    const status = document.getElementById('preview-status');
+
+    img.onload = () => {
+        loading.classList.add('hidden');
+        status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    };
+    img.onerror = () => {
+        loading.classList.add('hidden');
+        status.textContent = 'Preview failed';
+    };
+
+    refreshPreview();
+    setInterval(refreshPreview, 3000);
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    loadConfig();
+    setupPreview();
+});
+</script>
+
 </body>
 </html>
