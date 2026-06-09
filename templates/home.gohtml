@@ -61,7 +61,7 @@
                     <div id="save-status" class="text-sm mb-2 h-5"></div>
 
                     <!-- Tabs -->
-                    <div class="tabs tabs-lifted mb-2">
+                    <div class="tabs tabs-lift mb-2">
                         <button class="tab tab-active" onclick="showTab(this, 'tab-general')">General</button>
                         <button class="tab" onclick="showTab(this, 'tab-exposure')">Exposure</button>
                         <button class="tab" onclick="showTab(this, 'tab-focus')">Focus</button>
@@ -69,7 +69,7 @@
                     </div>
 
                     <!-- Tab: General -->
-                    <div id="tab-general" class="tab-content space-y-2">
+                    <div id="tab-general" class="panel-content space-y-2">
                         <div class="grid grid-cols-2 gap-2">
                             <label class="form-control"><span class="label-text">Width</span><input type="number" id="camera-width" class="input input-sm input-bordered"></label>
                             <label class="form-control"><span class="label-text">Height</span><input type="number" id="camera-height" class="input input-sm input-bordered"></label>
@@ -122,7 +122,7 @@
                     </div>
 
                     <!-- Tab: Exposure -->
-                    <div id="tab-exposure" class="tab-content hidden space-y-2">
+                    <div id="tab-exposure" class="panel-content hidden space-y-2">
                         <div class="grid grid-cols-2 gap-2">
                             <label class="form-control"><span class="label-text">Exposure Mode</span>
                                 <select id="camera-exposure" class="select select-sm select-bordered">
@@ -174,7 +174,7 @@
                     </div>
 
                     <!-- Tab: Focus -->
-                    <div id="tab-focus" class="tab-content hidden space-y-2">
+                    <div id="tab-focus" class="panel-content hidden space-y-2">
                         <div class="grid grid-cols-2 gap-2">
                             <label class="form-control"><span class="label-text">Autofocus Mode</span>
                                 <select id="camera-autofocus_mode" class="select select-sm select-bordered">
@@ -209,7 +209,7 @@
                     </div>
 
                     <!-- Tab: Advanced -->
-                    <div id="tab-advanced" class="tab-content hidden space-y-2">
+                    <div id="tab-advanced" class="panel-content hidden space-y-2">
                         <div class="grid grid-cols-2 gap-2">
                             <label class="form-control"><span class="label-text">HDR</span>
                                 <select id="camera-hdr" class="select select-sm select-bordered">
@@ -321,7 +321,7 @@ const CAMERA_STRINGS = [
 function showTab(btn, tabId) {
     document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('tab-active'));
     btn.classList.add('tab-active');
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+    document.querySelectorAll('.panel-content').forEach(c => c.classList.add('hidden'));
     document.getElementById(tabId).classList.remove('hidden');
 }
 
