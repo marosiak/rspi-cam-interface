@@ -154,19 +154,25 @@ func packagePhotos(timelapseName string) error {
 
 	var photos []string
 	prefix := timelapseName + "_"
+	now := time.Now()
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".jpg") {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if time.Since(info.ModTime()) > 5*time.Second {
-				photos = append(photos, filepath.Join(timelapseDir, name))
-			}
+		if !strings.HasSuffix(name, ".jpg") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		isOld := info.ModTime().Before(now.Add(-5 * time.Second))
+		isFuture := info.ModTime().After(now)
+		if strings.HasPrefix(name, prefix) && (isOld || isFuture) {
+			photos = append(photos, filepath.Join(timelapseDir, name))
+		} else if !strings.HasPrefix(name, prefix) && isOld {
+			os.Remove(filepath.Join(timelapseDir, name))
 		}
 	}
 
@@ -219,9 +225,15 @@ func packagePhotos(timelapseName string) error {
 		f.Close()
 	}
 
-	tw.Close()
-	gzw.Close()
-	file.Close()
+	if err := tw.Close(); err != nil {
+		success = false
+	}
+	if err := gzw.Close(); err != nil {
+		success = false
+	}
+	if err := file.Close(); err != nil {
+		success = false
+	}
 
 	if success {
 		for _, photo := range photos {
@@ -229,6 +241,7 @@ func packagePhotos(timelapseName string) error {
 		}
 	} else {
 		os.Remove(packagePath)
+		return fmt.Errorf("failed to package one or more photos")
 	}
 
 	return nil

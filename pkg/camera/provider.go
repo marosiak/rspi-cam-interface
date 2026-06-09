@@ -97,25 +97,44 @@ func (p *RspiCameraProvider) cleanup() {
 		return
 	}
 
-	var files []string
+	type fileInfo struct {
+		name    string
+		modTime time.Time
+	}
+	var files []fileInfo
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if filepath.Ext(name) == ".jpg" {
-			files = append(files, name)
+		if filepath.Ext(name) != ".jpg" {
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileInfo{name: name, modTime: info.ModTime()})
 	}
 
 	if len(files) <= 10 {
 		return
 	}
 
-	sort.Strings(files)
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime.Before(files[j].modTime)
+	})
+
+	p.mu.Lock()
+	latest := p.latest
+	p.mu.Unlock()
 
 	for _, f := range files[:len(files)-10] {
-		os.Remove(filepath.Join(p.tmpDir, f))
+		path := filepath.Join(p.tmpDir, f.name)
+		if path == latest {
+			continue
+		}
+		os.Remove(path)
 	}
 }
 
@@ -128,5 +147,9 @@ func (p *RspiCameraProvider) LatestImage() ([]byte, error) {
 		return nil, fmt.Errorf("no image available yet")
 	}
 
-	return os.ReadFile(latest)
+	data, err := os.ReadFile(latest)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
