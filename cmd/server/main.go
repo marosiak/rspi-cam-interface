@@ -256,6 +256,7 @@ func main() {
 	})
 
 	app.Get("/", func(c fiber.Ctx) error {
+		c.Set("Content-Type", "text/html")
 		return c.SendString(`<a href="/api/v1/photo">Photo</a><br><a href="/api/v1/timelapse">Timelapse Packages</a>`)
 	})
 
