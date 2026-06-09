@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -214,7 +215,11 @@ func startPackager(cfg Config, stopChan <-chan struct{}) {
 }
 
 func main() {
-	cfg, err := loadConfig("config.yaml")
+	var cfgPath string
+	flag.StringVar(&cfgPath, "cfg", "config.yaml", "path to config file")
+	flag.Parse()
+
+	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}

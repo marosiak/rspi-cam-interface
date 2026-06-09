@@ -20,9 +20,27 @@ fi
 # Create install directory
 mkdir -p "${INSTALL_DIR}"
 
-# Copy binary and config
-cp ./bin/server "${INSTALL_DIR}/server"
-cp ./config.yaml "${INSTALL_DIR}/config.yaml"
+# Copy binary
+if [ -f "./bin/server" ]; then
+    cp ./bin/server "${INSTALL_DIR}/server"
+else
+    echo "Error: ./bin/server not found. Build failed?"
+    exit 1
+fi
+
+# Copy config with override prompt
+if [ -f "${INSTALL_DIR}/config.yaml" ]; then
+    read -p "config.yaml already exists in ${INSTALL_DIR}. Override? [y/N]: " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        cp ./config.yaml "${INSTALL_DIR}/config.yaml"
+        echo "config.yaml updated."
+    else
+        echo "config.yaml kept."
+    fi
+else
+    cp ./config.yaml "${INSTALL_DIR}/config.yaml"
+    echo "config.yaml copied."
+fi
 
 # Create working subdirectories
 mkdir -p "${INSTALL_DIR}/timelapse"
@@ -43,7 +61,7 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/server
+ExecStart=${INSTALL_DIR}/server --cfg ${INSTALL_DIR}/config.yaml
 Restart=always
 RestartSec=5
 
@@ -54,7 +72,11 @@ EOF
 # Reload systemd and enable service
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
-systemctl start "${SERVICE_NAME}"
+if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    systemctl restart "${SERVICE_NAME}"
+else
+    systemctl start "${SERVICE_NAME}"
+fi
 
 echo "Installed and started ${SERVICE_NAME}"
 echo "Status:"
