@@ -234,8 +234,12 @@ func packagePhotos(timelapseName string) error {
 	return nil
 }
 
-func startTimelapse(provider camera.Provider, cfg Config, stopChan <-chan struct{}) {
-	ticker := time.NewTicker(time.Duration(cfg.Timelapse.Period))
+func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
+	cfgMu.RLock()
+	period := time.Duration(cfg.Timelapse.Period)
+	cfgMu.RUnlock()
+
+	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
 	os.MkdirAll("./timelapse", 0755)
@@ -248,8 +252,11 @@ func startTimelapse(provider camera.Provider, cfg Config, stopChan <-chan struct
 				log.Printf("timelapse failed to get latest image: %v", err)
 				continue
 			}
+			cfgMu.RLock()
+			name := cfg.Timelapse.Name
+			cfgMu.RUnlock()
 			id := time.Now().UnixNano()
-			filename := fmt.Sprintf("%s_%d.jpg", cfg.Timelapse.Name, id)
+			filename := fmt.Sprintf("%s_%d.jpg", name, id)
 			outputPath := filepath.Join("./timelapse", filename)
 			if err := os.WriteFile(outputPath, data, 0644); err != nil {
 				log.Printf("timelapse failed to write image: %v", err)
@@ -260,14 +267,17 @@ func startTimelapse(provider camera.Provider, cfg Config, stopChan <-chan struct
 	}
 }
 
-func startPackager(cfg Config, stopChan <-chan struct{}) {
+func startPackager(stopChan <-chan struct{}) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			if err := packagePhotos(cfg.Timelapse.Name); err != nil {
+			cfgMu.RLock()
+			name := cfg.Timelapse.Name
+			cfgMu.RUnlock()
+			if err := packagePhotos(name); err != nil {
 				log.Printf("packaging failed: %v", err)
 			}
 		case <-stopChan:
@@ -310,8 +320,8 @@ func main() {
 	stopChan := make(chan struct{})
 	defer close(stopChan)
 
-	go startTimelapse(provider, cfg, stopChan)
-	go startPackager(cfg, stopChan)
+	go startTimelapse(provider, stopChan)
+	go startPackager(stopChan)
 
 	engine := html.NewFileSystem(http.FS(templates.FS), ".gohtml")
 	app := fiber.New(fiber.Config{
