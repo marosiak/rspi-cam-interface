@@ -25,8 +25,10 @@ type Config struct {
 		Name   string        `yaml:"name"`
 	} `yaml:"timelapse"`
 	Camera struct {
-		VFlip bool `yaml:"vflip"`
-		HFlip bool `yaml:"hflip"`
+		VFlip    bool `yaml:"vflip"`
+		HFlip    bool `yaml:"hflip"`
+		NoPreview bool `yaml:"no_preview"`
+		Immediate bool `yaml:"immediate"`
 	} `yaml:"camera"`
 }
 
@@ -47,6 +49,12 @@ func cameraArgs(cfg Config) []string {
 	}
 	if cfg.Camera.HFlip {
 		args = append(args, "--hflip")
+	}
+	if cfg.Camera.NoPreview {
+		args = append(args, "-n")
+	}
+	if cfg.Camera.Immediate {
+		args = append(args, "--immediate")
 	}
 	return args
 }

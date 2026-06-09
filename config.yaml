@@ -5,3 +5,5 @@ timelapse:
 camera:
   vflip: true
   hflip: false
+  no_preview: true
+  immediate: true
