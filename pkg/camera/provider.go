@@ -25,6 +25,12 @@ type RspiCameraProvider struct {
 	ticker   *time.Ticker
 }
 
+func (p *RspiCameraProvider) SetArgs(args []string) {
+	p.mu.Lock()
+	p.args = args
+	p.mu.Unlock()
+}
+
 func NewRspiCameraProvider(baseArgs []string) *RspiCameraProvider {
 	return &RspiCameraProvider{
 		tmpDir: "./tmp",
@@ -68,7 +74,9 @@ func (p *RspiCameraProvider) capture() {
 	filename := fmt.Sprintf("%d.jpg", timestamp)
 	outputPath := filepath.Join(p.tmpDir, filename)
 
+	p.mu.Lock()
 	args := append([]string{}, p.args...)
+	p.mu.Unlock()
 	args = append(args, "--output", outputPath)
 
 	cmd := exec.Command("rpicam-jpeg", args...)

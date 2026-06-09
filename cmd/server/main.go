@@ -3,15 +3,21 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"rspi-cam-interface/templates"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/gofiber/template/html/v2"
 
 	"github.com/gofiber/fiber/v3"
 	"gopkg.in/yaml.v3"
@@ -19,18 +25,56 @@ import (
 	"rspi-cam-interface/pkg/camera"
 )
 
+type Duration time.Duration
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = Duration(dur)
+	return nil
+}
+
+func (d Duration) MarshalYAML() (interface{}, error) {
+	return time.Duration(d).String(), nil
+}
+
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	var s string
+	if err := node.Decode(&s); err != nil {
+		return err
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = Duration(dur)
+	return nil
+}
+
 type Config struct {
 	Timelapse struct {
-		Period time.Duration `yaml:"period"`
-		Name   string        `yaml:"name"`
-	} `yaml:"timelapse"`
-	Camera struct {
-		VFlip    bool `yaml:"vflip"`
-		HFlip    bool `yaml:"hflip"`
-		NoPreview bool `yaml:"no_preview"`
-		Immediate bool `yaml:"immediate"`
-	} `yaml:"camera"`
+		Period Duration `yaml:"period,omitempty" json:"period,omitempty"`
+		Name   string   `yaml:"name,omitempty" json:"name,omitempty"`
+	} `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 }
+
+var (
+	cfg           Config
+	camCfg        camera.CameraConfig
+	cfgPath       string
+	cameraCfgPath string
+	cfgMu         sync.RWMutex
+)
 
 func loadConfig(path string) (Config, error) {
 	var cfg Config
@@ -42,21 +86,35 @@ func loadConfig(path string) (Config, error) {
 	return cfg, err
 }
 
-func cameraArgs(cfg Config) []string {
-	var args []string
-	if cfg.Camera.VFlip {
-		args = append(args, "--vflip")
+func loadCameraConfig(path string) (camera.CameraConfig, error) {
+	var wrapper struct {
+		Camera camera.CameraConfig `yaml:"camera"`
 	}
-	if cfg.Camera.HFlip {
-		args = append(args, "--hflip")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return wrapper.Camera, err
 	}
-	if cfg.Camera.NoPreview {
-		args = append(args, "-n")
+	err = yaml.Unmarshal(data, &wrapper)
+	return wrapper.Camera, err
+}
+
+func saveConfig(path string, cfg Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
 	}
-	if cfg.Camera.Immediate {
-		args = append(args, "--immediate")
+	return os.WriteFile(path, data, 0644)
+}
+
+func saveCameraConfig(path string, cfg camera.CameraConfig) error {
+	wrapper := struct {
+		Camera camera.CameraConfig `yaml:"camera"`
+	}{Camera: cfg}
+	data, err := yaml.Marshal(wrapper)
+	if err != nil {
+		return err
 	}
-	return args
+	return os.WriteFile(path, data, 0644)
 }
 
 func nextPackageNumber(packagesDir, timelapseName string) int {
@@ -177,7 +235,7 @@ func packagePhotos(timelapseName string) error {
 }
 
 func startTimelapse(provider camera.Provider, cfg Config, stopChan <-chan struct{}) {
-	ticker := time.NewTicker(cfg.Timelapse.Period)
+	ticker := time.NewTicker(time.Duration(cfg.Timelapse.Period))
 	defer ticker.Stop()
 
 	os.MkdirAll("./timelapse", 0755)
@@ -219,11 +277,12 @@ func startPackager(cfg Config, stopChan <-chan struct{}) {
 }
 
 func main() {
-	var cfgPath string
 	flag.StringVar(&cfgPath, "cfg", "config.yaml", "path to config file")
+	flag.StringVar(&cameraCfgPath, "camera-cfg", "camera.yaml", "path to camera config file")
 	flag.Parse()
 
-	cfg, err := loadConfig(cfgPath)
+	var err error
+	cfg, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
@@ -235,7 +294,14 @@ func main() {
 		log.Fatal("timelapse name must not be empty")
 	}
 
-	provider := camera.NewRspiCameraProvider(cameraArgs(cfg))
+	if _, err := os.Stat(cameraCfgPath); err == nil {
+		camCfg, err = loadCameraConfig(cameraCfgPath)
+		if err != nil {
+			log.Fatalf("failed to load camera config: %v", err)
+		}
+	}
+
+	provider := camera.NewRspiCameraProvider(camera.ArgsFromConfig(camCfg))
 	if err := provider.Start(); err != nil {
 		log.Fatalf("failed to start camera provider: %v", err)
 	}
@@ -247,7 +313,10 @@ func main() {
 	go startTimelapse(provider, cfg, stopChan)
 	go startPackager(cfg, stopChan)
 
-	app := fiber.New()
+	engine := html.NewFileSystem(http.FS(templates.FS), ".gohtml")
+	app := fiber.New(fiber.Config{
+		Views: engine,
+	})
 
 	app.Get("/static/*", func(c fiber.Ctx) error {
 		path := c.Params("*")
@@ -264,8 +333,9 @@ func main() {
 	})
 
 	app.Get("/", func(c fiber.Ctx) error {
-		c.Set("Content-Type", "text/html")
-		return c.SendString(`<a href="/api/v1/photo">Photo</a><br><a href="/api/v1/timelapse">Timelapse Packages</a>`)
+		return c.Render("home", fiber.Map{
+			"Title": "Timelaps dashboard",
+		})
 	})
 
 	app.Get("/api/v1/photo", func(c fiber.Ctx) error {
@@ -297,6 +367,49 @@ func main() {
 		}
 		sort.Strings(urls)
 		return c.JSON(fiber.Map{"packages": urls})
+	})
+
+	app.Get("/api/v1/config", func(c fiber.Ctx) error {
+		cfgMu.RLock()
+		defer cfgMu.RUnlock()
+		return c.JSON(fiber.Map{
+			"config": cfg,
+			"camera": camCfg,
+		})
+	})
+
+	app.Post("/api/v1/config", func(c fiber.Ctx) error {
+		var body struct {
+			Config Config              `json:"config"`
+			Camera camera.CameraConfig `json:"camera"`
+		}
+		if err := c.Bind().Body(&body); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("invalid body: %v", err)})
+		}
+
+		if body.Config.Timelapse.Period <= 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "timelapse period must be positive"})
+		}
+		if body.Config.Timelapse.Name == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "timelapse name must not be empty"})
+		}
+
+		cfgMu.Lock()
+		defer cfgMu.Unlock()
+
+		cfg = body.Config
+		camCfg = body.Camera
+
+		if err := saveConfig(cfgPath, cfg); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to save config: %v", err)})
+		}
+		if err := saveCameraConfig(cameraCfgPath, camCfg); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to save camera config: %v", err)})
+		}
+
+		provider.SetArgs(camera.ArgsFromConfig(camCfg))
+
+		return c.JSON(fiber.Map{"status": "ok"})
 	})
 
 	log.Fatal(app.Listen(":80"))
