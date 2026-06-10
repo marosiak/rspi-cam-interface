@@ -11,11 +11,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"rspi-cam-interface/templates"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"rspi-cam-interface/templates"
 
 	"github.com/gofiber/template/html/v2"
 
@@ -103,7 +104,7 @@ func saveConfig(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 func saveCameraConfig(path string, cfg camera.CameraConfig) error {
@@ -114,7 +115,7 @@ func saveCameraConfig(path string, cfg camera.CameraConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 func nextPackageNumber(packagesDir, timelapseName string) int {
@@ -143,7 +144,7 @@ func packagePhotos(timelapseName string) error {
 	timelapseDir := "./timelapse"
 	packagesDir := "./packages"
 
-	if err := os.MkdirAll(packagesDir, 0755); err != nil {
+	if err := os.MkdirAll(packagesDir, 0o755); err != nil {
 		return err
 	}
 
@@ -255,7 +256,7 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
-	os.MkdirAll("./timelapse", 0755)
+	os.MkdirAll("./timelapse", 0o755)
 
 	for {
 		select {
@@ -271,7 +272,7 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 			id := time.Now().UnixNano()
 			filename := fmt.Sprintf("%s_%d.jpg", name, id)
 			outputPath := filepath.Join("./timelapse", filename)
-			if err := os.WriteFile(outputPath, data, 0644); err != nil {
+			if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 				log.Printf("timelapse failed to write image: %v", err)
 			}
 		case <-stopChan:
@@ -359,6 +360,10 @@ func main() {
 		return c.Render("home", fiber.Map{
 			"Title": "Timelaps dashboard",
 		})
+	})
+
+	app.Get("/api/v1/health", func(c fiber.Ctx) error {
+		return c.SendString("OK")
 	})
 
 	app.Get("/api/v1/photo", func(c fiber.Ctx) error {
