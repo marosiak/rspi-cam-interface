@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
         include:
           - goos: linux
             goarch: arm64
-            goarm: ''
+            goarm: ""
             suffix: linux-arm64
           - goos: linux
             goarch: arm
@@ -27,7 +27,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
+          go-version: "1.26"
           cache-dependency-path: go.sum
 
       - name: Build binaries
