@@ -11,8 +11,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Use already built binary
-if [ ! -f "./bin/server" ]; then
-  echo "Error: ./bin/server not found. Please build the binary first."
+if [ ! -f "./server" ]; then
+  echo "Error: ./server not found. Please build the binary first."
   exit 1
 fi
 
@@ -25,7 +25,7 @@ if systemctl is-active --quiet "${SERVICE_NAME}"; then
 fi
 
 # Copy binary
-cp ./bin/server "${INSTALL_DIR}/server"
+cp ./server "${INSTALL_DIR}/server"
 
 # Copy config with override prompt
 if [ -f "${INSTALL_DIR}/config.yaml" ]; then

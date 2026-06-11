@@ -45,21 +45,21 @@ func (s *State) save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0o644)
 }
 
 func main() {
 	serverURL := flag.String("server", "http://raspberrypi.local/", "Server base URL (e.g. http://192.168.1.100:8080)")
 	outputDir := flag.String("output-dir", ".", "Output directory for generated videos")
 	workDir := flag.String("work-dir", "./timelapse_work", "Working directory for downloads and frames")
-	fps := flag.Int("fps", 30, "Frames per second for output video")
+	fps := flag.Int("fps", 120, "Frames per second for output video")
 	keep := flag.Bool("keep", false, "Keep working directory after encoding")
 	stateFile := flag.String("state", "timelapse_state.json", "Path to state file tracking downloaded packages")
 	flag.Parse()
 
 	server := strings.TrimSuffix(*serverURL, "/")
 
-	if err := os.MkdirAll(*workDir, 0755); err != nil {
+	if err := os.MkdirAll(*workDir, 0o755); err != nil {
 		log.Fatalf("failed to create work dir: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func main() {
 
 	for _, group := range groupNames {
 		framesDir := filepath.Join(*workDir, "frames", group)
-		if err := os.MkdirAll(framesDir, 0755); err != nil {
+		if err := os.MkdirAll(framesDir, 0o755); err != nil {
 			log.Fatalf("failed to create frames dir for %s: %v", group, err)
 		}
 
