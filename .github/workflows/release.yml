@@ -73,6 +73,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: master
+          name: master
           files: dist/*.tar.gz
           body: |
             ## Quick Install (Raspberry Pi 64-bit)
