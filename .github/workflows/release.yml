@@ -22,26 +22,29 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.26'
+          cache-dependency-path: go.sum
 
-      - name: Build binary
+      - name: Build binaries
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
         run: |
           go build -ldflags="-s -w" -o server ./cmd/server
+          go build -ldflags="-s -w" -o client ./cmd/client
 
       - name: Package
         run: |
           mkdir -p dist
           tar -czf dist/rspi-cam-interface-${{ matrix.suffix }}.tar.gz \
             server \
+            client \
             install.sh \
             restart.sh \
             stop.sh \
@@ -50,7 +53,7 @@ jobs:
             camera.yaml
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rspi-cam-interface-${{ matrix.suffix }}
           path: dist/rspi-cam-interface-${{ matrix.suffix }}.tar.gz
@@ -62,13 +65,13 @@ jobs:
       contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*.tar.gz
           body: |
