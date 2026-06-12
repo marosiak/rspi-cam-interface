@@ -318,17 +318,19 @@ func parseTimelapseName(packageName string) (string, bool) {
 }
 
 type TimelapseGroup struct {
-	Name          string    `json:"name"`
-	PackageCount  int       `json:"package_count"`
-	TotalSize     int64     `json:"total_size"`
-	TotalSizeStr  string    `json:"total_size_str"`
-	EarliestTime  time.Time `json:"earliest_time"`
-	LatestTime    time.Time `json:"latest_time"`
-	EarliestTimeStr string `json:"earliest_time_str"`
-	LatestTimeStr   string `json:"latest_time_str"`
+	Name            string        `json:"name"`
+	PackageCount    int           `json:"package_count"`
+	TotalSize       int64         `json:"total_size"`
+	TotalSizeStr    string        `json:"total_size_str"`
+	EarliestTime    time.Time     `json:"earliest_time"`
+	LatestTime      time.Time     `json:"latest_time"`
+	EarliestTimeStr string        `json:"earliest_time_str"`
+	LatestTimeStr   string        `json:"latest_time_str"`
+	Duration        time.Duration `json:"duration"`
+	DurationStr     string        `json:"duration_str"`
 }
 
-func listTimelapseGroups() ([]TimelapseGroup, error) {
+func listTimelapseGroups(sortBy string) ([]TimelapseGroup, error) {
 	packagesDir := "./packages"
 	entries, err := os.ReadDir(packagesDir)
 	if err != nil {
@@ -376,11 +378,21 @@ func listTimelapseGroups() ([]TimelapseGroup, error) {
 		g.TotalSizeStr = formatBytes(g.TotalSize)
 		g.EarliestTimeStr = g.EarliestTime.Format("2006-01-02 15:04")
 		g.LatestTimeStr = g.LatestTime.Format("2006-01-02 15:04")
+		g.Duration = g.LatestTime.Sub(g.EarliestTime)
+		g.DurationStr = formatDuration(g.Duration)
 		result = append(result, *g)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
+
+	switch sortBy {
+	case "latest":
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].LatestTime.After(result[j].LatestTime)
+		})
+	default:
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Duration > result[j].Duration
+		})
+	}
 	return result, nil
 }
 
@@ -395,6 +407,20 @@ func formatBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	}
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %dm", h, m)
 }
 
 func deleteTimelapse(name string) (int, error) {
@@ -575,7 +601,11 @@ func main() {
 	})
 
 	app.Get("/api/v1/timelapse/groups", func(c fiber.Ctx) error {
-		groups, err := listTimelapseGroups()
+		sortBy := c.Query("sort", "duration")
+		if sortBy != "duration" && sortBy != "latest" {
+			sortBy = "duration"
+		}
+		groups, err := listTimelapseGroups(sortBy)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to list groups: %v", err)})
 		}

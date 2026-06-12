@@ -295,7 +295,13 @@
                     <div id="tab-timelapses" class="panel-content hidden space-y-2">
                         <div class="flex justify-between items-center mb-2">
                             <span id="timelapse-count" class="text-sm text-base-content/70">0 timelapses</span>
-                            <button onclick="refreshTimelapses()" class="btn btn-sm btn-outline">Refresh</button>
+                            <div class="flex gap-2">
+                                <div class="join">
+                                    <button id="sort-duration" onclick="setSort('duration')" class="btn btn-sm join-item btn-primary">Duration</button>
+                                    <button id="sort-latest" onclick="setSort('latest')" class="btn btn-sm join-item btn-outline">Latest</button>
+                                </div>
+                                <button onclick="refreshTimelapses()" class="btn btn-sm btn-outline">Refresh</button>
+                            </div>
                         </div>
                         <div id="timelapses-list" class="space-y-2">
                             <div class="text-sm text-base-content/50">Loading...</div>
@@ -310,6 +316,7 @@
 <script>
 let currentConfig = null;
 let lastSavedConfig = null;
+let timelapseSort = 'duration';
 
 const CAMERA_BOOLS = [
     'vflip','hflip','no_preview','fullscreen','qt_preview','flush','lores_par','no_raw',
@@ -486,7 +493,7 @@ async function loadTimelapses() {
     const list = document.getElementById('timelapses-list');
     const count = document.getElementById('timelapse-count');
     try {
-        const resp = await fetch('/api/v1/timelapse/groups');
+        const resp = await fetch('/api/v1/timelapse/groups?sort=' + timelapseSort);
         const data = await resp.json();
         if (!resp.ok) {
             list.innerHTML = '<div class="text-sm text-error">Error: ' + (data.error || 'unknown') + '</div>';
@@ -496,6 +503,24 @@ async function loadTimelapses() {
     } catch (e) {
         list.innerHTML = '<div class="text-sm text-error">Failed to load: ' + e.message + '</div>';
     }
+}
+
+function setSort(mode) {
+    timelapseSort = mode;
+    const durBtn = document.getElementById('sort-duration');
+    const latestBtn = document.getElementById('sort-latest');
+    if (mode === 'duration') {
+        durBtn.classList.add('btn-primary');
+        durBtn.classList.remove('btn-outline');
+        latestBtn.classList.remove('btn-primary');
+        latestBtn.classList.add('btn-outline');
+    } else {
+        latestBtn.classList.add('btn-primary');
+        latestBtn.classList.remove('btn-outline');
+        durBtn.classList.remove('btn-primary');
+        durBtn.classList.add('btn-outline');
+    }
+    loadTimelapses();
 }
 
 function renderTimelapses(groups) {
@@ -515,7 +540,7 @@ function renderTimelapses(groups) {
         html += '    <div class="flex justify-between items-start">';
         html += '      <div>';
         html += '        <h3 class="font-semibold text-base">' + escapeHtml(g.name) + '</h3>';
-        html += '        <div class="text-sm text-base-content/70">' + g.package_count + ' packages &middot; ' + escapeHtml(g.total_size_str) + '</div>';
+        html += '        <div class="text-sm text-base-content/70">' + g.package_count + ' packages &middot; ' + escapeHtml(g.total_size_str) + ' &middot; ' + escapeHtml(g.duration_str) + '</div>';
         html += '        <div class="text-xs text-base-content/50">' + escapeHtml(g.earliest_time_str) + ' &rarr; ' + escapeHtml(g.latest_time_str) + '</div>';
         html += '      </div>';
         html += '      <button onclick="deleteTimelapseGroup(\'' + escapeHtml(g.name) + '\')" class="btn btn-sm btn-error btn-outline">Delete</button>';
