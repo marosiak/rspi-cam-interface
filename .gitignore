@@ -5,3 +5,6 @@
 timelapse_state.json
 tmp
 packages
+/bin
+./server
+./client
