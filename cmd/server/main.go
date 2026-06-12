@@ -183,68 +183,85 @@ func packagePhotos(timelapseName string) error {
 		return nil
 	}
 
+	sort.Strings(photos)
+
 	nextNum := nextPackageNumber(packagesDir, timelapseName)
-	packageName := fmt.Sprintf("timelapse_%s_%02d.tar.gz", timelapseName, nextNum)
-	packagePath := filepath.Join(packagesDir, packageName)
 
-	file, err := os.Create(packagePath)
-	if err != nil {
-		return err
-	}
+	const batchSize = 5
+	var packaged []string
 
-	gzw := gzip.NewWriter(file)
-	tw := tar.NewWriter(gzw)
+	for i := 0; i < len(photos); i += batchSize {
+		end := i + batchSize
+		if end > len(photos) {
+			end = len(photos)
+		}
+		batch := photos[i:end]
 
-	success := true
-	for _, photo := range photos {
-		f, err := os.Open(photo)
+		packageName := fmt.Sprintf("timelapse_%s_%02d.tar.gz", timelapseName, nextNum)
+		packagePath := filepath.Join(packagesDir, packageName)
+
+		file, err := os.Create(packagePath)
 		if err != nil {
-			success = false
-			continue
+			return err
 		}
-		info, err := f.Stat()
-		if err != nil {
+
+		gzw := gzip.NewWriter(file)
+		tw := tar.NewWriter(gzw)
+
+		success := true
+		for _, photo := range batch {
+			f, err := os.Open(photo)
+			if err != nil {
+				success = false
+				continue
+			}
+			info, err := f.Stat()
+			if err != nil {
+				f.Close()
+				success = false
+				continue
+			}
+			hdr, err := tar.FileInfoHeader(info, info.Name())
+			if err != nil {
+				f.Close()
+				success = false
+				continue
+			}
+			hdr.Name = filepath.Base(photo)
+			if err := tw.WriteHeader(hdr); err != nil {
+				f.Close()
+				success = false
+				continue
+			}
+			if _, err := io.Copy(tw, f); err != nil {
+				f.Close()
+				success = false
+				continue
+			}
 			f.Close()
-			success = false
-			continue
 		}
-		hdr, err := tar.FileInfoHeader(info, info.Name())
-		if err != nil {
-			f.Close()
+
+		if err := tw.Close(); err != nil {
 			success = false
-			continue
 		}
-		hdr.Name = filepath.Base(photo)
-		if err := tw.WriteHeader(hdr); err != nil {
-			f.Close()
+		if err := gzw.Close(); err != nil {
 			success = false
-			continue
 		}
-		if _, err := io.Copy(tw, f); err != nil {
-			f.Close()
+		if err := file.Close(); err != nil {
 			success = false
-			continue
 		}
-		f.Close()
+
+		if success {
+			packaged = append(packaged, batch...)
+			nextNum++
+		} else {
+			os.Remove(packagePath)
+			return fmt.Errorf("failed to package one or more photos")
+		}
 	}
 
-	if err := tw.Close(); err != nil {
-		success = false
-	}
-	if err := gzw.Close(); err != nil {
-		success = false
-	}
-	if err := file.Close(); err != nil {
-		success = false
-	}
-
-	if success {
-		for _, photo := range photos {
-			os.Remove(photo)
-		}
-	} else {
-		os.Remove(packagePath)
-		return fmt.Errorf("failed to package one or more photos")
+	for _, photo := range packaged {
+		os.Remove(photo)
 	}
 
 	return nil

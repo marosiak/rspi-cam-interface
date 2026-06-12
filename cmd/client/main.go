@@ -101,8 +101,10 @@ type processDoneMsg struct {
 
 // --- Init ---
 
+type startProcessingMsg struct{}
+
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.processNext())
+	return tea.Batch(m.spinner.Tick, func() tea.Msg { return startProcessingMsg{} })
 }
 
 // --- Update ---
@@ -125,6 +127,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progressModel, cmd = m.progressModel.Update(msg)
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
+
+	case startProcessingMsg:
+		var cmd tea.Cmd
+		m, cmd = m.processNext()
+		cmds = append(cmds, cmd)
 
 	case processProgressMsg:
 		m.progressState[msg.group] = progressInfo{
@@ -152,7 +159,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.currentGroup = ""
 		}
-		cmds = append(cmds, m.processNext())
+		var cmd tea.Cmd
+		m, cmd = m.processNext()
+		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
 	}
 
@@ -164,14 +173,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m model) processNext() tea.Cmd {
+func (m model) processNext() (model, tea.Cmd) {
 	if m.processingIdx >= len(m.selectedGroups) {
-		return nil
+		return m, nil
 	}
 	group := m.selectedGroups[m.processingIdx]
 
 	m.progressCh = make(chan tea.Msg, 10)
 	m.groupStartTime = time.Now()
+	m.currentGroup = group
 
 	go func() {
 		err := processGroupWorkWithProgress(m.server, m.outputDir, m.workDir, m.keep, m.state, m.stateFile, group, m.groups[group], m.fps, func(stage string, current, total int, desc string) {
@@ -186,7 +196,7 @@ func (m model) processNext() tea.Cmd {
 		m.progressCh <- processDoneMsg{group: group, err: err}
 	}()
 
-	return func() tea.Msg {
+	return m, func() tea.Msg {
 		return <-m.progressCh
 	}
 }
@@ -212,6 +222,19 @@ func stageIcon(stage string) string {
 	default:
 		return "•"
 	}
+}
+
+func humanizeBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 func (m model) View() tea.View {
@@ -465,11 +488,23 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 	for i, pkg := range newPackages {
 		filename := path.Base(pkg)
 
+		lastUpdate := time.Now()
 		sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s...", filename))
-		archivePath, err := downloadFile(server, pkg, workDir)
+		archivePath, err := downloadFile(server, pkg, workDir, func(downloaded, total int64) {
+			if time.Since(lastUpdate) > 200*time.Millisecond {
+				if total > 0 {
+					pct := float64(downloaded) / float64(total) * 100
+					sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s (%.0f%%)", filename, pct))
+				} else {
+					sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s (%s)", filename, humanizeBytes(downloaded)))
+				}
+				lastUpdate = time.Now()
+			}
+		})
 		if err != nil {
 			return fmt.Errorf("failed to download %s: %w", pkg, err)
 		}
+		sendProgress("download", i+1, len(newPackages), fmt.Sprintf("Downloaded %s", filename))
 
 		sendProgress("extract", i, len(newPackages), fmt.Sprintf("Extracting %s...", filename))
 		if err := extractTarGz(archivePath, framesDir); err != nil {
@@ -477,6 +512,7 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 			return fmt.Errorf("failed to extract %s: %w", pkg, err)
 		}
 		os.Remove(archivePath)
+		sendProgress("extract", i+1, len(newPackages), fmt.Sprintf("Extracted %s", filename))
 
 		state.Packages[pkg] = true
 		if err := state.save(stateFile); err != nil {
@@ -504,7 +540,9 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 
 	sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps...", frameCount, fps))
 	outputPath := filepath.Join(outputDir, group+".mp4")
-	if err := encodeVideo(framesDir, outputPath, fps); err != nil {
+	if err := encodeVideo(framesDir, outputPath, fps, func(current, total int) {
+		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps... (preparing %d/%d)", frameCount, fps, current, total))
+	}); err != nil {
 		return fmt.Errorf("failed to encode video for %s: %w", group, err)
 	}
 	sendProgress("encode", 1, 1, fmt.Sprintf("Encoded %s", outputPath))
@@ -560,7 +598,7 @@ func fetchPackageList(server string) ([]string, error) {
 	return result.Packages, nil
 }
 
-func downloadFile(server, pkgPath, workDir string) (string, error) {
+func downloadFile(server, pkgPath, workDir string, onProgress func(downloaded, total int64)) (string, error) {
 	filename := path.Base(pkgPath)
 	archivePath := filepath.Join(workDir, filename)
 
@@ -578,21 +616,41 @@ func downloadFile(server, pkgPath, workDir string) (string, error) {
 		return "", fmt.Errorf("download status: %s", resp.Status)
 	}
 
+	total := resp.ContentLength
+
 	f, err := os.Create(archivePath)
 	if err != nil {
 		return "", err
 	}
-	_, err = io.Copy(f, resp.Body)
-	f.Close()
-	if err != nil {
-		return "", err
+	defer f.Close()
+
+	var downloaded int64
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			_, werr := f.Write(buf[:n])
+			if werr != nil {
+				return "", werr
+			}
+			downloaded += int64(n)
+			if onProgress != nil {
+				onProgress(downloaded, total)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 
 	return archivePath, nil
 }
 
 func downloadAndExtract(server, pkgPath, workDir, framesDir string) error {
-	archivePath, err := downloadFile(server, pkgPath, workDir)
+	archivePath, err := downloadFile(server, pkgPath, workDir, nil)
 	if err != nil {
 		return err
 	}
@@ -648,7 +706,7 @@ func extractTarGz(archivePath, destDir string) error {
 	return nil
 }
 
-func encodeVideo(framesDir, output string, fps int) error {
+func encodeVideo(framesDir, output string, fps int, onProgress func(current, total int)) error {
 	encoder, err := findH264Encoder()
 	if err != nil {
 		return err
@@ -680,6 +738,9 @@ func encodeVideo(framesDir, output string, fps int) error {
 		newPath := filepath.Join(framesDir, padded)
 		if err := os.Rename(oldPath, newPath); err != nil {
 			return err
+		}
+		if onProgress != nil {
+			onProgress(i+1, len(frames))
 		}
 	}
 
