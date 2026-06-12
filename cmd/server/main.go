@@ -303,6 +303,7 @@ func startPackager(stopChan <-chan struct{}) {
 }
 
 func main() {
+	mock := flag.Bool("mock", false, "use mock camera provider with placeholder.jpg")
 	flag.StringVar(&cfgPath, "cfg", "config.yaml", "path to config file")
 	flag.StringVar(&cameraCfgPath, "camera-cfg", "camera.yaml", "path to camera config file")
 	flag.Parse()
@@ -331,7 +332,12 @@ func main() {
 		}
 	}
 
-	provider := camera.NewRspiCameraProvider(camera.ArgsFromConfig(camCfg), time.Duration(cfg.CameraRefreshRate))
+	var provider camera.Provider
+	if *mock {
+		provider = camera.NewMockCameraProvider(time.Duration(cfg.CameraRefreshRate))
+	} else {
+		provider = camera.NewRspiCameraProvider(camera.ArgsFromConfig(camCfg), time.Duration(cfg.CameraRefreshRate))
+	}
 	if err := provider.Start(); err != nil {
 		log.Fatalf("failed to start camera provider: %v", err)
 	}

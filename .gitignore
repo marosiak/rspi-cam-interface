@@ -1,4 +1,7 @@
 *.mp4
 *.jpg
+!placeholder.jpg
 .idea/
 timelapse_state.json
+tmp
+packages
