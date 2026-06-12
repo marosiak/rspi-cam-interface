@@ -1,3 +1,5 @@
 timelapse:
   period: 60s
   name: first-timelapse
+
+camera_refresh_rate: 1s

@@ -42,6 +42,10 @@
                             <span class="label-text">Name</span>
                             <input type="text" id="timelapse-name" class="input input-sm input-bordered" placeholder="window">
                         </label>
+                        <label class="form-control">
+                            <span class="label-text">Camera Refresh Rate</span>
+                            <input type="text" id="camera-refresh-rate" class="input input-sm input-bordered" placeholder="1s">
+                        </label>
                     </div>
                 </div>
             </div>
@@ -353,6 +357,7 @@ function populateForm(cfg) {
     if (cfg.config) {
         document.getElementById('timelapse-period').value = cfg.config.timelapse?.period || '';
         document.getElementById('timelapse-name').value = cfg.config.timelapse?.name || '';
+        document.getElementById('camera-refresh-rate').value = cfg.config.camera_refresh_rate || '';
     }
     if (cfg.camera) {
         const cam = cfg.camera;
@@ -368,7 +373,8 @@ function collectForm() {
         timelapse: {
             period: document.getElementById('timelapse-period').value || '5s',
             name: document.getElementById('timelapse-name').value || 'window'
-        }
+        },
+        camera_refresh_rate: document.getElementById('camera-refresh-rate').value || '1s'
     };
     const camera = {};
     CAMERA_BOOLS.forEach(k => { const v = getField(k); if (v !== null) camera[k] = v; });

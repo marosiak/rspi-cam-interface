@@ -19,10 +19,11 @@ type Provider interface {
 type RspiCameraProvider struct {
 	tmpDir   string
 	args     []string
+	rate     time.Duration
 	mu       sync.Mutex
 	latest   string
 	stopChan chan struct{}
-	ticker   *time.Ticker
+	rateChan chan time.Duration
 }
 
 func (p *RspiCameraProvider) SetArgs(args []string) {
@@ -31,10 +32,25 @@ func (p *RspiCameraProvider) SetArgs(args []string) {
 	p.mu.Unlock()
 }
 
-func NewRspiCameraProvider(baseArgs []string) *RspiCameraProvider {
+func (p *RspiCameraProvider) SetRate(rate time.Duration) {
+	p.mu.Lock()
+	p.rate = rate
+	p.mu.Unlock()
+	select {
+	case p.rateChan <- rate:
+	default:
+	}
+}
+
+func NewRspiCameraProvider(baseArgs []string, rate time.Duration) *RspiCameraProvider {
+	if rate <= 0 {
+		rate = 1 * time.Second
+	}
 	return &RspiCameraProvider{
-		tmpDir: "./tmp",
-		args:   baseArgs,
+		tmpDir:   "./tmp",
+		args:     baseArgs,
+		rate:     rate,
+		rateChan: make(chan time.Duration),
 	}
 }
 
@@ -44,25 +60,30 @@ func (p *RspiCameraProvider) Start() error {
 	}
 
 	p.stopChan = make(chan struct{})
-	p.ticker = time.NewTicker(1 * time.Second)
-
 	go p.worker()
 
 	return nil
 }
 
 func (p *RspiCameraProvider) Stop() {
-	if p.ticker != nil {
-		p.ticker.Stop()
-	}
 	close(p.stopChan)
 }
 
 func (p *RspiCameraProvider) worker() {
+	p.mu.Lock()
+	rate := p.rate
+	p.mu.Unlock()
+
+	ticker := time.NewTicker(rate)
+	defer ticker.Stop()
+
 	for {
 		select {
-		case <-p.ticker.C:
+		case <-ticker.C:
 			p.capture()
+		case newRate := <-p.rateChan:
+			ticker.Stop()
+			ticker = time.NewTicker(newRate)
 		case <-p.stopChan:
 			return
 		}

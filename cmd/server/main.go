@@ -67,6 +67,7 @@ type Config struct {
 		Period Duration `yaml:"period,omitempty" json:"period,omitempty"`
 		Name   string   `yaml:"name,omitempty" json:"name,omitempty"`
 	} `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
+	CameraRefreshRate Duration `yaml:"camera_refresh_rate,omitempty" json:"camera_refresh_rate,omitempty"`
 }
 
 var (
@@ -317,6 +318,9 @@ func main() {
 	if cfg.Timelapse.Name == "" {
 		log.Fatal("timelapse name must not be empty")
 	}
+	if cfg.CameraRefreshRate <= 0 {
+		log.Fatal("camera refresh rate must be positive")
+	}
 
 	if _, err := os.Stat(cameraCfgPath); err == nil {
 		camCfg, err = loadCameraConfig(cameraCfgPath)
@@ -325,7 +329,7 @@ func main() {
 		}
 	}
 
-	provider := camera.NewRspiCameraProvider(camera.ArgsFromConfig(camCfg))
+	provider := camera.NewRspiCameraProvider(camera.ArgsFromConfig(camCfg), time.Duration(cfg.CameraRefreshRate))
 	if err := provider.Start(); err != nil {
 		log.Fatalf("failed to start camera provider: %v", err)
 	}
@@ -421,6 +425,9 @@ func main() {
 		if body.Config.Timelapse.Name == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "timelapse name must not be empty"})
 		}
+		if body.Config.CameraRefreshRate <= 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "camera refresh rate must be positive"})
+		}
 
 		cfgMu.Lock()
 		defer cfgMu.Unlock()
@@ -436,6 +443,7 @@ func main() {
 		}
 
 		provider.SetArgs(camera.ArgsFromConfig(camCfg))
+		provider.SetRate(time.Duration(body.Config.CameraRefreshRate))
 
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
