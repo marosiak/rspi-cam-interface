@@ -82,13 +82,13 @@ jobs:
             Run this one-liner on your Raspberry Pi:
 
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rspi-cam-interface-linux-arm64.tar.gz | sudo tar -xzC /tmp && sudo ./tmp/install.sh
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rspi-cam-interface-linux-arm64.tar.gz | sudo tar -xzC /tmp && sudo /tmp/install.sh
             ```
 
             ## Quick Install (Raspberry Pi 32-bit / older)
 
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rspi-cam-interface-linux-arm.tar.gz | sudo tar -xzC /tmp && sudo ./tmp/install.sh
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rspi-cam-interface-linux-arm.tar.gz | sudo tar -xzC /tmp && sudo /tmp/install.sh
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
