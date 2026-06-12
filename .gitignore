@@ -7,4 +7,6 @@ tmp
 packages
 /bin
 ./server
+server
 ./client
+client
