@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -319,7 +320,8 @@ func main() {
 		log.Fatal("timelapse name must not be empty")
 	}
 	if cfg.CameraRefreshRate <= 0 {
-		log.Fatal("camera refresh rate must be positive")
+		slog.Warn("camera refresh rate must be positive, defaulting to 10s")
+		cfg.CameraRefreshRate = Duration(time.Second * 10)
 	}
 
 	if _, err := os.Stat(cameraCfgPath); err == nil {
