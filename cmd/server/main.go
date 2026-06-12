@@ -302,6 +302,124 @@ func startPackager(stopChan <-chan struct{}) {
 	}
 }
 
+func parseTimelapseName(packageName string) (string, bool) {
+	if !strings.HasPrefix(packageName, "timelapse_") || !strings.HasSuffix(packageName, ".tar.gz") {
+		return "", false
+	}
+	trimmed := strings.TrimPrefix(packageName, "timelapse_")
+	trimmed = strings.TrimSuffix(trimmed, ".tar.gz")
+	// trimmed is now "name_NN" where NN is a number; we need to strip the last _NN
+	lastUnderscore := strings.LastIndex(trimmed, "_")
+	if lastUnderscore <= 0 {
+		return "", false
+	}
+	name := trimmed[:lastUnderscore]
+	return name, true
+}
+
+type TimelapseGroup struct {
+	Name          string    `json:"name"`
+	PackageCount  int       `json:"package_count"`
+	TotalSize     int64     `json:"total_size"`
+	TotalSizeStr  string    `json:"total_size_str"`
+	EarliestTime  time.Time `json:"earliest_time"`
+	LatestTime    time.Time `json:"latest_time"`
+	EarliestTimeStr string `json:"earliest_time_str"`
+	LatestTimeStr   string `json:"latest_time_str"`
+}
+
+func listTimelapseGroups() ([]TimelapseGroup, error) {
+	packagesDir := "./packages"
+	entries, err := os.ReadDir(packagesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []TimelapseGroup{}, nil
+		}
+		return nil, err
+	}
+
+	groups := make(map[string]*TimelapseGroup)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		timelapseName, ok := parseTimelapseName(name)
+		if !ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		g, exists := groups[timelapseName]
+		if !exists {
+			g = &TimelapseGroup{
+				Name:         timelapseName,
+				EarliestTime: info.ModTime(),
+				LatestTime:   info.ModTime(),
+			}
+			groups[timelapseName] = g
+		}
+		g.PackageCount++
+		g.TotalSize += info.Size()
+		if info.ModTime().Before(g.EarliestTime) {
+			g.EarliestTime = info.ModTime()
+		}
+		if info.ModTime().After(g.LatestTime) {
+			g.LatestTime = info.ModTime()
+		}
+	}
+
+	result := make([]TimelapseGroup, 0, len(groups))
+	for _, g := range groups {
+		g.TotalSizeStr = formatBytes(g.TotalSize)
+		g.EarliestTimeStr = g.EarliestTime.Format("2006-01-02 15:04")
+		g.LatestTimeStr = g.LatestTime.Format("2006-01-02 15:04")
+		result = append(result, *g)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+func deleteTimelapse(name string) (int, error) {
+	packagesDir := "./packages"
+	entries, err := os.ReadDir(packagesDir)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	prefix := fmt.Sprintf("timelapse_%s_", name)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		fname := entry.Name()
+		if strings.HasPrefix(fname, prefix) && strings.HasSuffix(fname, ".tar.gz") {
+			if err := os.Remove(filepath.Join(packagesDir, fname)); err == nil {
+				deleted++
+			}
+		}
+	}
+	return deleted, nil
+}
+
 func main() {
 	mock := flag.Bool("mock", false, "use mock camera provider with placeholder.jpg")
 	flag.StringVar(&cfgPath, "cfg", "config.yaml", "path to config file")
@@ -454,6 +572,26 @@ func main() {
 		provider.SetRate(time.Duration(body.Config.CameraRefreshRate))
 
 		return c.JSON(fiber.Map{"status": "ok"})
+	})
+
+	app.Get("/api/v1/timelapse/groups", func(c fiber.Ctx) error {
+		groups, err := listTimelapseGroups()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to list groups: %v", err)})
+		}
+		return c.JSON(fiber.Map{"groups": groups})
+	})
+
+	app.Delete("/api/v1/timelapse/:name", func(c fiber.Ctx) error {
+		name := c.Params("name")
+		if name == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+		}
+		deleted, err := deleteTimelapse(name)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to delete: %v", err)})
+		}
+		return c.JSON(fiber.Map{"deleted": deleted})
 	})
 
 	log.Fatal(app.Listen(":80"))
