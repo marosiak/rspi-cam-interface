@@ -52,9 +52,19 @@ Key difference between endpoints:
 | `-server` | `http://raspberrypi.local/` | Server base URL |
 | `-output-dir` | `.` | Output directory for generated videos |
 | `-work-dir` | `./timelapse_work` | Working directory for downloads and frames |
-| `-fps` | `30` | Frames per second for output video |
+| `-fps` | `60` | Frames per second for output video |
 | `-keep` | `false` | Keep working directory after encoding |
 | `-state` | `timelapse_state.json` | Path to state file tracking processed packages |
+
+### Client TUI
+
+The client now uses a bubbletea v2 + bubbles v2 TUI (Terminal User Interface) with three screens:
+
+1. **Group selection** (`bubbles/list`): A rich list with filtering, pagination, and help. Each group shows a checkmark (`[✓]`) when selected, package count, and how many are new. Groups with new packages are pre-selected. Navigate with `up/down` (or `k`/`j`), `space` to toggle selection, `/` to filter, `enter` to confirm.
+2. **FPS selection** (`bubbles/textinput`): A text input field to enter any FPS value. Defaults to the `-fps` flag value (60 if not specified). `enter` to confirm, `esc` to go back.
+3. **Processing** (`bubbles/spinner`): A spinner animates while the current group is being processed. Shows completed count, current group, and any errors. Press `q` or `ctrl+c` to quit at any time.
+
+All `log` output during the TUI is redirected to `client.log` so it doesn't interfere with the terminal rendering.
 
 ### Timelapse Flow
 

@@ -16,6 +16,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type State struct {
@@ -48,11 +54,234 @@ func (s *State) save(path string) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+// --- Model ---
+
+type model struct {
+	server     string
+	outputDir  string
+	workDir    string
+	keep       bool
+	stateFile  string
+	state      *State
+	groups     map[string][]string
+
+	// Processing
+	spinner        spinner.Model
+	progressModel  progress.Model
+	selectedGroups []string
+	fps            int
+	processingIdx  int
+	doneGroups     []string
+	errGroups      map[string]error
+	currentGroup   string
+	progressCh     chan tea.Msg
+	progressState  map[string]progressInfo
+	groupStartTime time.Time
+}
+
+type progressInfo struct {
+	stage       string
+	current     int
+	total       int
+	description string
+}
+
+type processProgressMsg struct {
+	group       string
+	stage       string
+	current     int
+	total       int
+	description string
+}
+
+type processDoneMsg struct {
+	group string
+	err   error
+}
+
+// --- Init ---
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, m.processNext())
+}
+
+// --- Update ---
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.progressModel.SetWidth(msg.Width - 4)
+		return m, nil
+
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" || msg.String() == "q" {
+			return m, tea.Quit
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
+		m.progressModel, cmd = m.progressModel.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+
+	case processProgressMsg:
+		m.progressState[msg.group] = progressInfo{
+			stage:       msg.stage,
+			current:     msg.current,
+			total:       msg.total,
+			description: msg.description,
+		}
+		if m.progressCh != nil {
+			return m, func() tea.Msg {
+				return <-m.progressCh
+			}
+		}
+		return m, nil
+
+	case processDoneMsg:
+		m.processingIdx++
+		if msg.err != nil {
+			m.errGroups[msg.group] = msg.err
+		} else {
+			m.doneGroups = append(m.doneGroups, msg.group)
+		}
+		if m.processingIdx < len(m.selectedGroups) {
+			m.currentGroup = m.selectedGroups[m.processingIdx]
+		} else {
+			m.currentGroup = ""
+		}
+		cmds = append(cmds, m.processNext())
+		return m, tea.Batch(cmds...)
+	}
+
+	var cmd tea.Cmd
+	m.spinner, cmd = m.spinner.Update(msg)
+	cmds = append(cmds, cmd)
+	m.progressModel, cmd = m.progressModel.Update(msg)
+	cmds = append(cmds, cmd)
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) processNext() tea.Cmd {
+	if m.processingIdx >= len(m.selectedGroups) {
+		return nil
+	}
+	group := m.selectedGroups[m.processingIdx]
+
+	m.progressCh = make(chan tea.Msg, 10)
+	m.groupStartTime = time.Now()
+
+	go func() {
+		err := processGroupWorkWithProgress(m.server, m.outputDir, m.workDir, m.keep, m.state, m.stateFile, group, m.groups[group], m.fps, func(stage string, current, total int, desc string) {
+			m.progressCh <- processProgressMsg{
+				group:       group,
+				stage:       stage,
+				current:     current,
+				total:       total,
+				description: desc,
+			}
+		})
+		m.progressCh <- processDoneMsg{group: group, err: err}
+	}()
+
+	return func() tea.Msg {
+		return <-m.progressCh
+	}
+}
+
+// --- View ---
+
+var (
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#EE6FF8"))
+	subtitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00B4D8"))
+	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#777777"))
+	successStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#04B575"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
+)
+
+func stageIcon(stage string) string {
+	switch stage {
+	case "download":
+		return "↓"
+	case "extract":
+		return "📦"
+	case "encode":
+		return "🎬"
+	default:
+		return "•"
+	}
+}
+
+func (m model) View() tea.View {
+	var s strings.Builder
+	s.WriteString(titleStyle.Render("Processing timelapse videos") + "\n\n")
+
+	// Overall progress
+	totalGroups := len(m.selectedGroups)
+	doneGroups := len(m.doneGroups)
+	if totalGroups > 0 {
+		s.WriteString(subtitleStyle.Render("Overall Progress") + "\n")
+		s.WriteString(m.progressModel.ViewAs(float64(doneGroups) / float64(totalGroups)) + "\n")
+		s.WriteString(fmt.Sprintf("Groups: %d/%d completed", doneGroups, totalGroups) + "\n")
+	}
+
+	if m.currentGroup != "" {
+		info := m.progressState[m.currentGroup]
+		s.WriteString("\n" + subtitleStyle.Render("Current: "+m.currentGroup) + "\n")
+
+		if info.description != "" {
+			s.WriteString(info.description + "\n")
+		}
+
+		if info.total > 0 {
+			progress := float64(info.current) / float64(info.total)
+			s.WriteString(m.progressModel.ViewAs(progress) + "\n")
+			s.WriteString(fmt.Sprintf("%s %d/%d", stageIcon(info.stage), info.current, info.total) + "\n")
+		}
+
+		elapsed := time.Since(m.groupStartTime)
+		s.WriteString(fmt.Sprintf("Elapsed: %s", elapsed.Round(time.Second)))
+		if info.total > info.current && info.current > 0 {
+			rate := elapsed / time.Duration(info.current)
+			remaining := time.Duration(info.total-info.current) * rate
+			s.WriteString(fmt.Sprintf(" • ETA: %s", remaining.Round(time.Second)))
+		}
+		s.WriteString("\n")
+
+		s.WriteString("\n" + m.spinner.View() + "\n")
+	} else if totalGroups > 0 {
+		s.WriteString("\n" + successStyle.Render("All done!") + "\n")
+	}
+
+	if len(m.errGroups) > 0 {
+		s.WriteString("\nErrors:\n")
+		for _, group := range m.selectedGroups {
+			if err, ok := m.errGroups[group]; ok {
+				s.WriteString(errorStyle.Render(fmt.Sprintf("  • %s: %v", group, err)) + "\n")
+			}
+		}
+	}
+
+	if m.processingIdx >= len(m.selectedGroups) && len(m.selectedGroups) > 0 {
+		s.WriteString("\n" + helpStyle.Render("All done! Press q to quit."))
+	} else {
+		s.WriteString("\n" + helpStyle.Render("Press q to quit."))
+	}
+
+	v := tea.NewView(s.String())
+	v.AltScreen = true
+	return v
+}
+
+// --- Main ---
+
 func main() {
-	serverURL := flag.String("server", "http://raspberrypi.local/", "Server base URL (e.g. http://192.168.1.100:8080)")
+	serverURL := flag.String("server", "http://raspberrypi.local/", "Server base URL")
 	outputDir := flag.String("output-dir", ".", "Output directory for generated videos")
 	workDir := flag.String("work-dir", "./timelapse_work", "Working directory for downloads and frames")
-	fps := flag.Int("fps", 120, "Frames per second for output video")
+	fpsFlag := flag.Int("fps", 60, "Frames per second for output video")
 	keep := flag.Bool("keep", false, "Keep working directory after encoding")
 	stateFile := flag.String("state", "timelapse_state.json", "Path to state file tracking downloaded packages")
 	flag.Parse()
@@ -73,12 +302,11 @@ func main() {
 		log.Fatalf("failed to fetch package list: %v", err)
 	}
 	if len(packages) == 0 {
-		log.Println("no packages found")
+		fmt.Println("no packages found")
 		return
 	}
 
 	groups := groupPackages(packages)
-	log.Printf("found %d package(s) in %d group(s)", len(packages), len(groups))
 
 	groupNames := make([]string, 0, len(groups))
 	for name := range groups {
@@ -86,43 +314,123 @@ func main() {
 	}
 	sort.Strings(groupNames)
 
-	for _, group := range groupNames {
-		framesDir := filepath.Join(*workDir, "frames", group)
-		if err := os.MkdirAll(framesDir, 0o755); err != nil {
-			log.Fatalf("failed to create frames dir for %s: %v", group, err)
-		}
+	// Redirect logs to file so they don't interfere with TUI
+	logFile, err := os.OpenFile("client.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatalf("failed to open log file: %v", err)
+	}
+	defer logFile.Close()
+	log.SetOutput(logFile)
 
-		newPackages := false
-		for _, pkg := range groups[group] {
-			if state.Packages[pkg] {
-				log.Printf("skipping already processed %s", pkg)
-				continue
+	// Build group options for huh
+	groupOptions := make([]huh.Option[string], 0, len(groupNames))
+	for _, name := range groupNames {
+		count := len(groups[name])
+		newCount := 0
+		for _, pkg := range groups[name] {
+			if !state.Packages[pkg] {
+				newCount++
 			}
-			if err := downloadAndExtract(server, pkg, *workDir, framesDir); err != nil {
-				log.Printf("failed to process %s: %v", pkg, err)
-				continue
-			}
-			state.Packages[pkg] = true
-			if err := state.save(*stateFile); err != nil {
-				log.Printf("failed to save state: %v", err)
-			}
-			newPackages = true
 		}
+		var label string
+		if newCount == 0 {
+			label = fmt.Sprintf("%s (%d packages, all done)", name, count)
+		} else {
+			label = fmt.Sprintf("%s (%d packages, %d new)", name, count, newCount)
+		}
+		opt := huh.NewOption(label, name).Selected(newCount > 0)
+		groupOptions = append(groupOptions, opt)
+	}
 
-		if !newPackages {
-			entries, err := os.ReadDir(framesDir)
-			if err != nil || len(entries) == 0 {
-				log.Printf("no frames for %s, skipping encoding", group)
-				continue
-			}
-		}
+	var selectedGroups []string
+	var selectedFPS int
 
-		outputPath := filepath.Join(*outputDir, group+".mp4")
-		if err := encodeVideo(framesDir, outputPath, *fps); err != nil {
-			log.Printf("failed to encode video for %s: %v", group, err)
-			continue
+	// Custom theme: use a filled circle for all cursors so MultiSelect and Select match
+	customTheme := huh.ThemeFunc(func(isDark bool) *huh.Styles {
+		s := huh.ThemeCharm(isDark)
+		s.Focused.SelectSelector = s.Focused.SelectSelector.SetString("● ")
+		s.Focused.MultiSelectSelector = s.Focused.MultiSelectSelector.SetString("● ")
+		s.Blurred.SelectSelector = s.Blurred.SelectSelector.SetString("● ")
+		return s
+	})
+
+	fpsOptions := []huh.Option[int]{
+		huh.NewOption("30 FPS", 30),
+		huh.NewOption("60 FPS (default)", 60),
+		huh.NewOption("120 FPS", 120),
+		huh.NewOption("240 FPS", 240),
+	}
+
+	// Huh form for group selection and FPS
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Key("groups").
+				Title("Select timelapse groups to process").
+				Description("Space to toggle, ↑↓ to navigate, enter to confirm").
+				Options(groupOptions...).
+				Filterable(true).
+				Height(len(groupOptions) + 2).
+				Value(&selectedGroups),
+		),
+		huh.NewGroup(
+			huh.NewSelect[int]().
+				Key("fps").
+				Title("Select FPS for output video").
+				Description("↑↓ to navigate, enter to confirm").
+				Options(fpsOptions...).
+				Height(len(fpsOptions) + 2).
+				Value(&selectedFPS),
+		),
+	).WithTheme(customTheme)
+
+	// Set default FPS
+	selectedFPS = *fpsFlag
+
+	if err := form.Run(); err != nil {
+		if err == huh.ErrUserAborted {
+			fmt.Println("Aborted.")
+			return
 		}
-		log.Printf("video saved to %s", outputPath)
+		log.Fatalf("form error: %v", err)
+	}
+
+	// Validate at least one group selected
+	if len(selectedGroups) == 0 {
+		fmt.Println("no groups selected")
+		return
+	}
+
+	// Progress
+	progressModel := progress.New(progress.WithDefaultBlend(), progress.WithWidth(40))
+
+	// Spinner
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+
+	m := model{
+		server:         server,
+		outputDir:      *outputDir,
+		workDir:        *workDir,
+		keep:           *keep,
+		stateFile:      *stateFile,
+		state:          state,
+		groups:         groups,
+		selectedGroups: selectedGroups,
+		fps:            selectedFPS,
+		progressModel:  progressModel,
+		spinner:        sp,
+		progressState:  make(map[string]progressInfo),
+		errGroups:      make(map[string]error),
+	}
+	if len(m.selectedGroups) > 0 {
+		m.currentGroup = m.selectedGroups[0]
+	}
+
+	p := tea.NewProgram(m)
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
 	}
 
 	if !*keep {
@@ -130,6 +438,78 @@ func main() {
 			log.Printf("failed to clean up work dir: %v", err)
 		}
 	}
+}
+
+// --- Work functions ---
+
+func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, state *State, stateFile, group string, packages []string, fps int, sendProgress func(stage string, current, total int, desc string)) error {
+	framesDir := filepath.Join(workDir, "frames", group)
+	if err := os.MkdirAll(framesDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create frames dir: %w", err)
+	}
+
+	newPackages := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if !state.Packages[pkg] {
+			newPackages = append(newPackages, pkg)
+		}
+	}
+
+	if len(newPackages) == 0 {
+		entries, err := os.ReadDir(framesDir)
+		if err != nil || len(entries) == 0 {
+			return fmt.Errorf("no frames for %s, skipping encoding", group)
+		}
+	}
+
+	for i, pkg := range newPackages {
+		filename := path.Base(pkg)
+
+		sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s...", filename))
+		archivePath, err := downloadFile(server, pkg, workDir)
+		if err != nil {
+			return fmt.Errorf("failed to download %s: %w", pkg, err)
+		}
+
+		sendProgress("extract", i, len(newPackages), fmt.Sprintf("Extracting %s...", filename))
+		if err := extractTarGz(archivePath, framesDir); err != nil {
+			os.Remove(archivePath)
+			return fmt.Errorf("failed to extract %s: %w", pkg, err)
+		}
+		os.Remove(archivePath)
+
+		state.Packages[pkg] = true
+		if err := state.save(stateFile); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+	}
+
+	// Count frames
+	entries, err := os.ReadDir(framesDir)
+	if err != nil {
+		return err
+	}
+	frameCount := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			name := entry.Name()
+			if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+				frameCount++
+			}
+		}
+	}
+	if frameCount == 0 {
+		return fmt.Errorf("no frames found in %s", framesDir)
+	}
+
+	sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps...", frameCount, fps))
+	outputPath := filepath.Join(outputDir, group+".mp4")
+	if err := encodeVideo(framesDir, outputPath, fps); err != nil {
+		return fmt.Errorf("failed to encode video for %s: %w", group, err)
+	}
+	sendProgress("encode", 1, 1, fmt.Sprintf("Encoded %s", outputPath))
+	log.Printf("video saved to %s", outputPath)
+	return nil
 }
 
 func groupPackages(packages []string) map[string][]string {
@@ -180,7 +560,7 @@ func fetchPackageList(server string) ([]string, error) {
 	return result.Packages, nil
 }
 
-func downloadAndExtract(server, pkgPath, workDir, framesDir string) error {
+func downloadFile(server, pkgPath, workDir string) (string, error) {
 	filename := path.Base(pkgPath)
 	archivePath := filepath.Join(workDir, filename)
 
@@ -190,26 +570,36 @@ func downloadAndExtract(server, pkgPath, workDir, framesDir string) error {
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download status: %s", resp.Status)
+		return "", fmt.Errorf("download status: %s", resp.Status)
 	}
 
 	f, err := os.Create(archivePath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, err = io.Copy(f, resp.Body)
 	f.Close()
 	if err != nil {
+		return "", err
+	}
+
+	return archivePath, nil
+}
+
+func downloadAndExtract(server, pkgPath, workDir, framesDir string) error {
+	archivePath, err := downloadFile(server, pkgPath, workDir)
+	if err != nil {
 		return err
 	}
 
-	log.Printf("extracting %s", filename)
+	log.Printf("extracting %s", path.Base(pkgPath))
 	if err := extractTarGz(archivePath, framesDir); err != nil {
+		os.Remove(archivePath)
 		return err
 	}
 
@@ -305,8 +695,8 @@ func encodeVideo(framesDir, output string, fps int) error {
 		"-movflags", "+faststart",
 		output,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = log.Writer()
+	cmd.Stderr = log.Writer()
 	return cmd.Run()
 }
 
