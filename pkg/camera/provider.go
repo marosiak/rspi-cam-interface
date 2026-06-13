@@ -57,7 +57,7 @@ func NewRspiCameraProvider(baseArgs []string, rate time.Duration) *RspiCameraPro
 }
 
 func (p *RspiCameraProvider) Start() error {
-	if err := os.MkdirAll(p.tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(p.tmpDir, 0o755); err != nil {
 		return err
 	}
 
@@ -93,7 +93,7 @@ func (p *RspiCameraProvider) worker() {
 }
 
 func (p *RspiCameraProvider) capture() {
-	timestamp := time.Now().UnixNano()
+	timestamp := time.Now().Unix()
 	filename := fmt.Sprintf("%d.jpg", timestamp)
 	outputPath := filepath.Join(p.tmpDir, filename)
 
@@ -163,14 +163,13 @@ func (p *RspiCameraProvider) cleanup() {
 
 func (p *RspiCameraProvider) LatestImage() ([]byte, error) {
 	p.mu.Lock()
-	latest := p.latest
-	p.mu.Unlock()
+	defer p.mu.Unlock()
 
-	if latest == "" {
+	if p.latest == "" {
 		return nil, fmt.Errorf("no image available yet")
 	}
 
-	data, err := os.ReadFile(latest)
+	data, err := os.ReadFile(p.latest)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +214,7 @@ func (p *MockCameraProvider) Start() error {
 	if _, err := os.Stat(p.sourcePath); err != nil {
 		return fmt.Errorf("placeholder image not found: %w", err)
 	}
-	if err := os.MkdirAll(p.tmpDir, 0755); err != nil {
+	if err := os.MkdirAll(p.tmpDir, 0o755); err != nil {
 		return err
 	}
 	p.stopChan = make(chan struct{})
@@ -249,7 +248,7 @@ func (p *MockCameraProvider) worker() {
 }
 
 func (p *MockCameraProvider) capture() {
-	timestamp := time.Now().UnixNano()
+	timestamp := time.Now().Unix()
 	filename := fmt.Sprintf("%d.jpg", timestamp)
 	outputPath := filepath.Join(p.tmpDir, filename)
 
@@ -257,7 +256,7 @@ func (p *MockCameraProvider) capture() {
 	if err != nil {
 		return
 	}
-	if err := os.WriteFile(outputPath, data, 0644); err != nil {
+	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 		return
 	}
 
@@ -317,14 +316,13 @@ func (p *MockCameraProvider) cleanup() {
 
 func (p *MockCameraProvider) LatestImage() ([]byte, error) {
 	p.mu.Lock()
-	latest := p.latest
-	p.mu.Unlock()
+	defer p.mu.Unlock()
 
-	if latest == "" {
+	if p.latest == "" {
 		return nil, fmt.Errorf("no image available yet")
 	}
 
-	data, err := os.ReadFile(latest)
+	data, err := os.ReadFile(p.latest)
 	if err != nil {
 		return nil, err
 	}

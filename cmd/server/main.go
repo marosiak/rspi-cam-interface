@@ -197,7 +197,7 @@ func packagePhotos(timelapseName string) error {
 		}
 		batch := photos[i:end]
 
-		packageName := fmt.Sprintf("timelapse_%s_%02d.tar.gz", timelapseName, nextNum)
+		packageName := fmt.Sprintf("timelapse_%s_%06d.tar.gz", timelapseName, nextNum)
 		packagePath := filepath.Join(packagesDir, packageName)
 
 		file, err := os.Create(packagePath)
@@ -288,7 +288,7 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 			cfgMu.RLock()
 			name := cfg.Timelapse.Name
 			cfgMu.RUnlock()
-			id := time.Now().UnixNano()
+			id := time.Now().Unix()
 			filename := fmt.Sprintf("%s_%d.jpg", name, id)
 			outputPath := filepath.Join("./timelapse", filename)
 			if err := os.WriteFile(outputPath, data, 0o644); err != nil {

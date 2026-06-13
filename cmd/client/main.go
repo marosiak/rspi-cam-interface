@@ -478,13 +478,19 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 		}
 	}
 
+	outputPath := filepath.Join(outputDir, group+".mp4")
+
 	if len(newPackages) == 0 {
 		entries, err := os.ReadDir(framesDir)
 		if err != nil || len(entries) == 0 {
 			return fmt.Errorf("no frames for %s, skipping encoding", group)
 		}
+		if _, err := os.Stat(outputPath); err == nil {
+			return nil
+		}
 	}
 
+	var newFramePaths []string
 	for i, pkg := range newPackages {
 		filename := path.Base(pkg)
 
@@ -507,11 +513,13 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 		sendProgress("download", i+1, len(newPackages), fmt.Sprintf("Downloaded %s", filename))
 
 		sendProgress("extract", i, len(newPackages), fmt.Sprintf("Extracting %s...", filename))
-		if err := extractTarGz(archivePath, framesDir); err != nil {
+		extracted, err := extractTarGz(archivePath, framesDir)
+		if err != nil {
 			os.Remove(archivePath)
 			return fmt.Errorf("failed to extract %s: %w", pkg, err)
 		}
 		os.Remove(archivePath)
+		newFramePaths = append(newFramePaths, extracted...)
 		sendProgress("extract", i+1, len(newPackages), fmt.Sprintf("Extracted %s", filename))
 
 		state.Packages[pkg] = true
@@ -538,14 +546,40 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 		return fmt.Errorf("no frames found in %s", framesDir)
 	}
 
-	sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps...", frameCount, fps))
-	outputPath := filepath.Join(outputDir, group+".mp4")
-	if err := encodeVideo(framesDir, outputPath, fps, func(current, total int) {
-		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps... (preparing %d/%d)", frameCount, fps, current, total))
-	}); err != nil {
-		return fmt.Errorf("failed to encode video for %s: %w", group, err)
+	// Sort new frame paths to ensure chronological order across packages
+	sort.Strings(newFramePaths)
+
+	if _, err := os.Stat(outputPath); err == nil && len(newFramePaths) > 0 {
+		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps...", len(newFramePaths), fps))
+		tmpOutput := outputPath + ".tmp.mp4"
+		if err := encodeFrames(newFramePaths, tmpOutput, fps, func(current, total int) {
+			sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps... (preparing %d/%d)", len(newFramePaths), fps, current, total))
+		}); err != nil {
+			os.Remove(tmpOutput)
+			return fmt.Errorf("failed to encode new frames for %s: %w", group, err)
+		}
+		sendProgress("encode", 0, 1, fmt.Sprintf("Appending to existing %s...", outputPath))
+		concatOutput := outputPath + ".concat.mp4"
+		if err := concatVideos(outputPath, tmpOutput, concatOutput); err != nil {
+			os.Remove(tmpOutput)
+			os.Remove(concatOutput)
+			return fmt.Errorf("failed to concatenate video for %s: %w", group, err)
+		}
+		os.Remove(tmpOutput)
+		if err := os.Rename(concatOutput, outputPath); err != nil {
+			os.Remove(concatOutput)
+			return fmt.Errorf("failed to replace output video: %w", err)
+		}
+		sendProgress("encode", 1, 1, fmt.Sprintf("Appended to %s", outputPath))
+	} else {
+		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps...", frameCount, fps))
+		if err := encodeVideo(framesDir, outputPath, fps, func(current, total int) {
+			sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps... (preparing %d/%d)", frameCount, fps, current, total))
+		}); err != nil {
+			return fmt.Errorf("failed to encode video for %s: %w", group, err)
+		}
+		sendProgress("encode", 1, 1, fmt.Sprintf("Encoded %s", outputPath))
 	}
-	sendProgress("encode", 1, 1, fmt.Sprintf("Encoded %s", outputPath))
 	log.Printf("video saved to %s", outputPath)
 	return nil
 }
@@ -649,43 +683,45 @@ func downloadFile(server, pkgPath, workDir string, onProgress func(downloaded, t
 	return archivePath, nil
 }
 
-func downloadAndExtract(server, pkgPath, workDir, framesDir string) error {
+func downloadAndExtract(server, pkgPath, workDir, framesDir string) ([]string, error) {
 	archivePath, err := downloadFile(server, pkgPath, workDir, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	log.Printf("extracting %s", path.Base(pkgPath))
-	if err := extractTarGz(archivePath, framesDir); err != nil {
+	extracted, err := extractTarGz(archivePath, framesDir)
+	if err != nil {
 		os.Remove(archivePath)
-		return err
+		return nil, err
 	}
 
 	os.Remove(archivePath)
-	return nil
+	return extracted, nil
 }
 
-func extractTarGz(archivePath, destDir string) error {
+func extractTarGz(archivePath, destDir string) ([]string, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
 	gr, err := gzip.NewReader(f)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer gr.Close()
 
 	tr := tar.NewReader(gr)
+	var extracted []string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if hdr.Typeflag != tar.TypeReg {
@@ -695,28 +731,23 @@ func extractTarGz(archivePath, destDir string) error {
 		outPath := filepath.Join(destDir, filepath.Base(hdr.Name))
 		outFile, err := os.Create(outPath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		_, err = io.Copy(outFile, tr)
 		outFile.Close()
 		if err != nil {
-			return err
+			return nil, err
 		}
+		extracted = append(extracted, outPath)
 	}
-	return nil
+	return extracted, nil
 }
 
 func encodeVideo(framesDir, output string, fps int, onProgress func(current, total int)) error {
-	encoder, err := findH264Encoder()
-	if err != nil {
-		return err
-	}
-
 	entries, err := os.ReadDir(framesDir)
 	if err != nil {
 		return err
 	}
-
 	var frames []string
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -724,20 +755,34 @@ func encodeVideo(framesDir, output string, fps int, onProgress func(current, tot
 		}
 		name := entry.Name()
 		if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
-			frames = append(frames, name)
+			frames = append(frames, filepath.Join(framesDir, name))
 		}
 	}
 	if len(frames) == 0 {
 		return fmt.Errorf("no frames found in %s", framesDir)
 	}
 	sort.Strings(frames)
+	return encodeFrames(frames, output, fps, onProgress)
+}
 
-	for i, name := range frames {
-		padded := fmt.Sprintf("frame_%06d.jpg", i)
-		oldPath := filepath.Join(framesDir, name)
-		newPath := filepath.Join(framesDir, padded)
-		if err := os.Rename(oldPath, newPath); err != nil {
-			return err
+func encodeFrames(frames []string, output string, fps int, onProgress func(current, total int)) error {
+	encoder, err := findH264Encoder()
+	if err != nil {
+		return err
+	}
+
+	tmpDir, err := os.MkdirTemp("", "timelapse_frames_*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	for i, src := range frames {
+		dst := filepath.Join(tmpDir, fmt.Sprintf("frame_%06d.jpg", i))
+		if err := os.Link(src, dst); err != nil {
+			if err := copyFile(src, dst); err != nil {
+				return fmt.Errorf("failed to copy frame %s: %w", src, err)
+			}
 		}
 		if onProgress != nil {
 			onProgress(i+1, len(frames))
@@ -745,13 +790,14 @@ func encodeVideo(framesDir, output string, fps int, onProgress func(current, tot
 	}
 
 	log.Printf("encoding %d frames at %d fps using %s", len(frames), fps, encoder)
-	pattern := filepath.Join(framesDir, "frame_%06d.jpg")
+	pattern := filepath.Join(tmpDir, "frame_%06d.jpg")
 	cmd := exec.Command("ffmpeg",
 		"-y",
 		"-framerate", fmt.Sprintf("%d", fps),
 		"-i", pattern,
 		"-c:v", encoder,
 		"-pix_fmt", "yuv420p",
+		"-vsync", "0",
 		"-vf", "scale=1920:-2",
 		"-movflags", "+faststart",
 		output,
@@ -759,6 +805,71 @@ func encodeVideo(framesDir, output string, fps int, onProgress func(current, tot
 	cmd.Stdout = log.Writer()
 	cmd.Stderr = log.Writer()
 	return cmd.Run()
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func concatVideos(videoA, videoB, output string) error {
+	listFile := output + ".concat.txt"
+	f, err := os.Create(listFile)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f, "file '%s'\nfile '%s'\n", videoA, videoB)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	defer os.Remove(listFile)
+
+	encoder, err := findH264Encoder()
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command("ffmpeg",
+		"-y",
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listFile,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		output,
+	)
+	cmd.Stdout = log.Writer()
+	cmd.Stderr = log.Writer()
+	err = cmd.Run()
+	if err != nil {
+		log.Printf("concat with copy failed, falling back to re-encode: %v", err)
+		cmd = exec.Command("ffmpeg",
+			"-y",
+			"-i", videoA,
+			"-i", videoB,
+			"-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
+			"-map", "[outv]",
+			"-c:v", encoder,
+			"-pix_fmt", "yuv420p",
+			"-movflags", "+faststart",
+			output,
+		)
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
+		return cmd.Run()
+	}
+	return nil
 }
 
 func findH264Encoder() (string, error) {
