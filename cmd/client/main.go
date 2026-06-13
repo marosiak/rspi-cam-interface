@@ -57,13 +57,13 @@ func (s *State) save(path string) error {
 // --- Model ---
 
 type model struct {
-	server     string
-	outputDir  string
-	workDir    string
-	keep       bool
-	stateFile  string
-	state      *State
-	groups     map[string][]string
+	server    string
+	outputDir string
+	workDir   string
+	keep      bool
+	stateFile string
+	state     *State
+	groups    map[string][]string
 
 	// Processing
 	spinner        spinner.Model
@@ -246,7 +246,7 @@ func (m model) View() tea.View {
 	doneGroups := len(m.doneGroups)
 	if totalGroups > 0 {
 		s.WriteString(subtitleStyle.Render("Overall Progress") + "\n")
-		s.WriteString(m.progressModel.ViewAs(float64(doneGroups) / float64(totalGroups)) + "\n")
+		s.WriteString(m.progressModel.ViewAs(float64(doneGroups)/float64(totalGroups)) + "\n")
 		s.WriteString(fmt.Sprintf("Groups: %d/%d completed", doneGroups, totalGroups) + "\n")
 	}
 
@@ -309,7 +309,44 @@ func main() {
 	stateFile := flag.String("state", "timelapse_state.json", "Path to state file tracking downloaded packages")
 	flag.Parse()
 
-	server := strings.TrimSuffix(*serverURL, "/")
+	// Default host from flag (strip protocol and trailing slash)
+	defaultHost := strings.TrimPrefix(strings.TrimSuffix(*serverURL, "/"), "http://")
+	defaultHost = strings.TrimPrefix(defaultHost, "https://")
+
+	// Redirect logs to file so they don't interfere with TUI
+	logFile, err := os.OpenFile("client.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatalf("failed to open log file: %v", err)
+	}
+	defer logFile.Close()
+	log.SetOutput(logFile)
+
+	// Host input form
+	var hostInput string
+	hostInput = defaultHost
+	hostForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Enter server host").
+				Description("The hostname or IP of the Raspberry Pi server").
+				Value(&hostInput).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("host cannot be empty")
+					}
+					return nil
+				}),
+		),
+	)
+	if err := hostForm.Run(); err != nil {
+		if err == huh.ErrUserAborted {
+			fmt.Println("Aborted.")
+			return
+		}
+		log.Fatalf("form error: %v", err)
+	}
+
+	server := "http://" + strings.TrimSuffix(hostInput, "/")
 
 	if err := os.MkdirAll(*workDir, 0o755); err != nil {
 		log.Fatalf("failed to create work dir: %v", err)
@@ -336,14 +373,6 @@ func main() {
 		groupNames = append(groupNames, name)
 	}
 	sort.Strings(groupNames)
-
-	// Redirect logs to file so they don't interfere with TUI
-	logFile, err := os.OpenFile("client.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		log.Fatalf("failed to open log file: %v", err)
-	}
-	defer logFile.Close()
-	log.SetOutput(logFile)
 
 	// Build group options for huh
 	groupOptions := make([]huh.Option[string], 0, len(groupNames))
@@ -393,7 +422,7 @@ func main() {
 				Description("Space to toggle, ↑↓ to navigate, enter to confirm").
 				Options(groupOptions...).
 				Filterable(true).
-				Height(len(groupOptions) + 2).
+				Height(len(groupOptions)+2).
 				Value(&selectedGroups),
 		),
 		huh.NewGroup(
@@ -402,7 +431,7 @@ func main() {
 				Title("Select FPS for output video").
 				Description("↑↓ to navigate, enter to confirm").
 				Options(fpsOptions...).
-				Height(len(fpsOptions) + 2).
+				Height(len(fpsOptions)+2).
 				Value(&selectedFPS),
 		),
 	).WithTheme(customTheme)

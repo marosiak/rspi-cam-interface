@@ -1,5 +1,5 @@
 
-pi@raspberrypi:~/rspi-cam-interface $ rpicam-jpeg --help
+pi@raspberrypi:~/rspi-cam-interface $ rpicam-still --help
 Valid options are:
   -h [ --help ] [=arg(=1)] (=0)         Print this help message
   --version [=arg(=1)] (=0)             Displays the build version number
