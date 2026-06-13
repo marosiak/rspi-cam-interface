@@ -1,0 +1,45 @@
+name: Dev Build
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build server
+        run: go build -o ./bin/server ./cmd/server
+
+      - name: Build client
+        run: go build -o ./bin/client ./cmd/client
+
+      - name: Delete existing dev release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete dev --yes --cleanup-tag || true
+        continue-on-error: true
+
+      - name: Create dev pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create dev \
+            --title "Dev Build" \
+            --prerelease \
+            --target ${{ github.sha }} \
+            --notes "Automated dev build from \`${{ github.sha }}\`" \
+            ./bin/server ./bin/client

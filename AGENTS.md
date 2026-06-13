@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Go web server providing a REST API to capture photos via Raspberry Pi camera module (`rpicam-jpeg`). Built with [Fiber v3](https://docs.gofiber.io/). Includes a CLI client for downloading timelapse packages and generating videos.
+Go web server providing a REST API to capture photos via Raspberry Pi camera module (`rpicam-still`). Built with [Fiber v3](https://docs.gofiber.io/). Includes a CLI client for downloading timelapse packages and generating videos.
 
 ## Commands
 
@@ -17,7 +17,7 @@ Go web server providing a REST API to capture photos via Raspberry Pi camera mod
 
 No tests, Makefile, or CI config exist yet.
 
-> **Note**: This project is developed on Fedora but runs on Raspberry Pi OS, where the `rpicam-jpeg` tool is available. Camera endpoints will not function during local Fedora development.
+> **Note**: This project is developed on Fedora but runs on Raspberry Pi OS, where the `rpicam-still` tool is available. Camera endpoints will not function during local Fedora development.
 
 ## Architecture & Control Flow
 
@@ -35,11 +35,9 @@ No tests, Makefile, or CI config exist yet.
 
 Both `/preview` and `/photo` follow the same flow:
 
-1. Generate a random ID for the output filename.
-2. Shell out to `rpicam-jpeg` with `--output <filename>.jpg`.
-3. Read the resulting JPEG into memory.
-4. Delete the file immediately.
-5. Return the JPEG bytes with the correct `Content-Type: image/jpeg`.
+1. The background worker captures an image periodically using `rpicam-still` with `--output -` (stdout).
+2. The image bytes are stored in memory.
+3. Return the JPEG bytes with the correct `Content-Type: image/jpeg`.
 
 Key difference between endpoints:
 - **Preview**: `--timeout 2000 --width 640 --height 480`
@@ -68,9 +66,10 @@ All `log` output during the TUI is redirected to `client.log` so it doesn't inte
 
 ### Timelapse Flow
 
-1. Background goroutine captures photos every configured period to `./timelapse`.
-2. Background packager runs every minute, bundling photos older than 5s into `.tar.gz` archives in `./packages`.
-3. Client queries `/api/v1/timelapse`, downloads archives, groups them by name prefix, unpacks them, and uses `ffmpeg` to generate a video per group.
+1. Background goroutine captures photos every configured period using `rpicam-still --output -` (stdout to memory).
+2. The in-memory image is written to `./timelapse` for packaging.
+3. Background packager runs every minute, bundling photos older than 5s into `.tar.gz` archives in `./packages`.
+4. Client queries `/api/v1/timelapse`, downloads archives, groups them by name prefix, unpacks them, and uses `ffmpeg` to generate a video per group.
 
 #### Grouping
 
@@ -91,6 +90,6 @@ The client maintains a state file (`timelapse_state.json` by default) that recor
 ## Gotchas
 
 - **Port 8080**: Server listens on `:8080`.
-- **Hardware dependency**: `rpicam-jpeg` must be installed and the user must have camera permissions. This only works on Raspberry Pi OS or compatible systems with a connected camera module.
+- **Hardware dependency**: `rpicam-still` must be installed and the user must have camera permissions. This only works on Raspberry Pi OS or compatible systems with a connected camera module.
 - **No tests**: There are zero tests in the repo. Add them before making significant changes.
-- **Cross-environment**: Developed on Fedora, deployed/run on Raspberry Pi OS. `rpicam-jpeg` is not available on Fedora, so camera endpoints will fail there.
+- **Cross-environment**: Developed on Fedora, deployed/run on Raspberry Pi OS. `rpicam-still` is not available on Fedora, so camera endpoints will fail there.
