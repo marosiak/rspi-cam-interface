@@ -65,8 +65,9 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 
 type Config struct {
 	Timelapse struct {
-		Period Duration `yaml:"period,omitempty" json:"period,omitempty"`
-		Name   string   `yaml:"name,omitempty" json:"name,omitempty"`
+		Period  Duration `yaml:"period,omitempty" json:"period,omitempty"`
+		Name    string   `yaml:"name,omitempty" json:"name,omitempty"`
+		Counter int      `yaml:"counter,omitempty" json:"counter,omitempty"`
 	} `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	CameraRefreshRate Duration `yaml:"camera_refresh_rate,omitempty" json:"camera_refresh_rate,omitempty"`
 }
@@ -285,11 +286,15 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 				log.Printf("timelapse failed to get latest image: %v", err)
 				continue
 			}
-			cfgMu.RLock()
+			cfgMu.Lock()
 			name := cfg.Timelapse.Name
-			cfgMu.RUnlock()
-			id := time.Now().Unix()
-			filename := fmt.Sprintf("%s_%d.jpg", name, id)
+			counter := cfg.Timelapse.Counter
+			cfg.Timelapse.Counter++
+			if err := saveConfig(cfgPath, cfg); err != nil {
+				log.Printf("timelapse failed to save config: %v", err)
+			}
+			cfgMu.Unlock()
+			filename := fmt.Sprintf("%s_%d.jpg", name, counter)
 			outputPath := filepath.Join("./timelapse", filename)
 			if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 				log.Printf("timelapse failed to write image: %v", err)
@@ -601,7 +606,9 @@ func main() {
 		cfgMu.Lock()
 		defer cfgMu.Unlock()
 
+		oldCounter := cfg.Timelapse.Counter
 		cfg = body.Config
+		cfg.Timelapse.Counter = oldCounter
 		camCfg = body.Camera
 
 		if err := saveConfig(cfgPath, cfg); err != nil {
