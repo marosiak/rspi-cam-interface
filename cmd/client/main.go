@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -576,7 +577,7 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 	}
 
 	// Sort new frame paths to ensure chronological order across packages
-	sort.Strings(newFramePaths)
+	sortFrames(newFramePaths)
 
 	if _, err := os.Stat(outputPath); err == nil && len(newFramePaths) > 0 {
 		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps...", len(newFramePaths), fps))
@@ -790,8 +791,25 @@ func encodeVideo(framesDir, output string, fps int, onProgress func(current, tot
 	if len(frames) == 0 {
 		return fmt.Errorf("no frames found in %s", framesDir)
 	}
-	sort.Strings(frames)
+	sortFrames(frames)
 	return encodeFrames(frames, output, fps, onProgress)
+}
+
+func sortFrames(frames []string) {
+	sort.Slice(frames, func(i, j int) bool {
+		return frameNumber(frames[i]) < frameNumber(frames[j])
+	})
+}
+
+func frameNumber(path string) int {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	parts := strings.Split(base, "_")
+	if len(parts) > 0 {
+		if n, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 func encodeFrames(frames []string, output string, fps int, onProgress func(current, total int)) error {
@@ -800,33 +818,43 @@ func encodeFrames(frames []string, output string, fps int, onProgress func(curre
 		return err
 	}
 
-	tmpDir, err := os.MkdirTemp("", "timelapse_frames_*")
+	sortFrames(frames)
+
+	listFile := output + ".frames.txt"
+	f, err := os.Create(listFile)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	duration := fmt.Sprintf("%.6f", 1.0/float64(fps))
+	for _, frame := range frames {
+		if _, err := fmt.Fprintf(f, "file '%s'\nduration %s\n", frame, duration); err != nil {
+			f.Close()
+			os.Remove(listFile)
+			return err
+		}
+	}
+	if len(frames) > 0 {
+		if _, err := fmt.Fprintf(f, "file '%s'\n", frames[len(frames)-1]); err != nil {
+			f.Close()
+			os.Remove(listFile)
+			return err
+		}
+	}
+	f.Close()
+	defer os.Remove(listFile)
 
-	for i, src := range frames {
-		dst := filepath.Join(tmpDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.Link(src, dst); err != nil {
-			if err := copyFile(src, dst); err != nil {
-				return fmt.Errorf("failed to copy frame %s: %w", src, err)
-			}
-		}
-		if onProgress != nil {
-			onProgress(i+1, len(frames))
-		}
+	if onProgress != nil {
+		onProgress(len(frames), len(frames))
 	}
 
 	log.Printf("encoding %d frames at %d fps using %s", len(frames), fps, encoder)
-	pattern := filepath.Join(tmpDir, "frame_%06d.jpg")
 	cmd := exec.Command("ffmpeg",
 		"-y",
-		"-framerate", fmt.Sprintf("%d", fps),
-		"-i", pattern,
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listFile,
 		"-c:v", encoder,
 		"-pix_fmt", "yuv420p",
-		"-vsync", "0",
 		"-vf", "scale=1920:-2",
 		"-movflags", "+faststart",
 		output,
@@ -834,21 +862,6 @@ func encodeFrames(frames []string, output string, fps int, onProgress func(curre
 	cmd.Stdout = log.Writer()
 	cmd.Stderr = log.Writer()
 	return cmd.Run()
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
 }
 
 func concatVideos(videoA, videoB, output string) error {

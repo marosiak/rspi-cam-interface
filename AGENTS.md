@@ -86,6 +86,7 @@ The client maintains a state file (`timelapse_state.json` by default) that recor
 - Standard Go formatting (`gofmt`).
 - Use Fiber's `fiber.Ctx` for handlers.
 - `log.Fatal` for fatal server startup errors.
+- When using `go build` only to verify compilation (not to produce a binary for use), output to `/tmp/` (e.g., `go build -o /tmp/check ./cmd/server`) to avoid leaving artifacts in the project directory.
 
 ## Gotchas
 
