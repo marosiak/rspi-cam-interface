@@ -99,21 +99,20 @@ jobs:
           body: |
             Automated dev build from `${{ github.sha }}`
 
-            ## Quick Install (Raspberry Pi 64-bit)
-
-            Run this one-liner on your Raspberry Pi:
+            # Quick Install
+            ## Raspberry pi zero 2W (64-bit)
 
             ```bash
             cd /tmp && curl -fsSL https://github.com/${{ github.repository }}/releases/download/dev/rspi-cam-interface-linux-arm64.tar.gz | tar -xz && sudo /tmp/install.sh
             ```
 
-            ## Quick Install (Raspberry Pi 32-bit / older)
+            ## Raspberry pi zero 2W (32-bit)
 
             ```bash
             cd /tmp && curl -fsSL https://github.com/${{ github.repository }}/releases/download/dev/rspi-cam-interface-linux-arm.tar.gz | tar -xz && sudo /tmp/install.sh
             ```
 
-            ## Quick Install (Raspberry Pi Zero W)
+            ## Raspberry Pi Zero W (32-bit)
 
             ```bash
             cd /tmp && curl -fsSL https://github.com/${{ github.repository }}/releases/download/dev/rspi-cam-interface-linux-armv6.tar.gz | tar -xz && sudo /tmp/install.sh
