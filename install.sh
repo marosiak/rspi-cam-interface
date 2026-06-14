@@ -10,6 +10,16 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Prompt for port
+read -rp "Port to run the server on [80]: " port_input
+PORT="${port_input:-80}"
+
+# Validate port is a number
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  echo "Error: port must be a number."
+  exit 1
+fi
+
 # Use already built binary
 if [ ! -f "./server" ]; then
   echo "Error: ./server not found. Please build the binary first."
@@ -40,6 +50,9 @@ else
   cp ./config.yaml "${INSTALL_DIR}/config.yaml"
   echo "config.yaml copied."
 fi
+
+# Ensure port in installed config.yaml
+sed -i "s/^port:.*/port: ${PORT}/" "${INSTALL_DIR}/config.yaml"
 
 # Copy camera config with override prompt
 if [ -f "${INSTALL_DIR}/camera.yaml" ]; then

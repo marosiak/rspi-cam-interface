@@ -70,6 +70,7 @@ type Config struct {
 		Counter int      `yaml:"counter,omitempty" json:"counter,omitempty"`
 	} `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	CameraRefreshRate Duration `yaml:"camera_refresh_rate,omitempty" json:"camera_refresh_rate,omitempty"`
+	Port              int      `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 var (
@@ -479,6 +480,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+	if cfg.Port <= 0 {
+		cfg.Port = 80
+	}
 
 	if cfg.Timelapse.Period <= 0 {
 		log.Fatal("timelapse period must be positive")
@@ -648,5 +652,5 @@ func main() {
 		return c.JSON(fiber.Map{"deleted": deleted})
 	})
 
-	log.Fatal(app.Listen(":80"))
+	log.Fatal(app.Listen(fmt.Sprintf(":%d", cfg.Port)))
 }
