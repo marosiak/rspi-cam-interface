@@ -19,6 +19,11 @@ jobs:
             goarch: arm
             goarm: 7
             suffix: linux-arm
+          - goos: linux
+            goarch: arm
+            goarm: 6
+            suffix: linux-armv6
+            desc: "Raspberry Pi Zero W"
 
     steps:
       - name: Checkout
@@ -89,6 +94,12 @@ jobs:
 
             ```bash
             cd /tmp && curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rspi-cam-interface-linux-arm.tar.gz | tar -xz && sudo /tmp/install.sh
+            ```
+
+            ## Quick Install (Raspberry Pi Zero W)
+
+            ```bash
+            cd /tmp && curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rspi-cam-interface-linux-armv6.tar.gz | tar -xz && sudo /tmp/install.sh
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
