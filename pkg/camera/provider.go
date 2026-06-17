@@ -90,7 +90,7 @@ func (p *RspiCameraProvider) capture() {
 	p.mu.Unlock()
 	args = append(args, "--output", "-")
 
-	cmd := exec.Command("rpicam-jpeg", args...)
+	cmd := exec.Command("rpicam-still", args...)
 	data, err := cmd.Output()
 	if err != nil {
 		return
