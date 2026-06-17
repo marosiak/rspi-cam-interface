@@ -75,8 +75,6 @@ type model struct {
 	progressModel  progress.Model
 	selectedGroups []string
 	fps            int
-	crf            int
-	pixelFmt       string
 	processingIdx  int
 	doneGroups     []string
 	errGroups      map[string]error
@@ -198,7 +196,7 @@ func (m model) processNext() (model, tea.Cmd) {
 	m.currentGroup = group
 
 	go func() {
-		failed, total, err := processGroupWorkWithProgress(m.server, m.outputDir, m.workDir, m.keep, m.state, m.stateFile, group, m.groups[group], m.fps, m.crf, m.pixelFmt, func(stage string, current, total int, desc string) {
+		failed, total, err := processGroupWorkWithProgress(m.server, m.outputDir, m.workDir, m.keep, m.state, m.stateFile, group, m.groups[group], m.fps, func(stage string, current, total int, desc string) {
 			m.progressCh <- processProgressMsg{
 				group:       group,
 				stage:       stage,
@@ -438,15 +436,6 @@ func main() {
 		huh.NewOption("240 FPS", 240),
 	}
 
-	compressionOptions := []huh.Option[string]{
-		huh.NewOption("Original quality (no extra compression)", "none"),
-		huh.NewOption("High quality (light compression)", "light"),
-		huh.NewOption("Balanced (medium compression)", "medium"),
-		huh.NewOption("Small file (heavy compression)", "heavy"),
-	}
-	var compression string
-	var selectedPixelFmt string
-
 	// Huh form for group selection and FPS
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -468,28 +457,6 @@ func main() {
 				Height(len(fpsOptions)+2).
 				Value(&selectedFPS),
 		),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Key("compression").
-				Title("Select video compression").
-				Description("↑↓ to navigate, enter to confirm").
-				Options(compressionOptions...).
-				Height(len(compressionOptions)+2).
-				Value(&compression),
-		),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Key("pixfmt").
-				Title("Select pixel format").
-				Description("yuv420p = best compatibility, yuv444p = better color, rgb24 = largest/best quality").
-				Options(
-					huh.NewOption("yuv420p — best compatibility (default)", "yuv420p"),
-					huh.NewOption("yuv444p — better color quality", "yuv444p"),
-					huh.NewOption("rgb24 — maximum color fidelity", "rgb24"),
-				).
-				Height(5).
-				Value(&selectedPixelFmt),
-		),
 	).WithTheme(customTheme)
 
 	// Set default FPS
@@ -509,16 +476,6 @@ func main() {
 		return
 	}
 
-	crf := -1
-	switch compression {
-	case "light":
-		crf = 18
-	case "medium":
-		crf = 23
-	case "heavy":
-		crf = 28
-	}
-
 	// Progress
 	progressModel := progress.New(progress.WithDefaultBlend(), progress.WithWidth(40))
 
@@ -536,8 +493,6 @@ func main() {
 		groups:         groups,
 		selectedGroups: selectedGroups,
 		fps:            selectedFPS,
-		crf:            crf,
-		pixelFmt:       selectedPixelFmt,
 		progressModel:  progressModel,
 		spinner:        sp,
 		progressState:  make(map[string]progressInfo),
@@ -562,7 +517,7 @@ func main() {
 
 // --- Work functions ---
 
-func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, state *State, stateFile, group string, items []string, fps int, crf int, pixelFmt string, sendProgress func(stage string, current, total int, desc string)) (failed int, total int, err error) {
+func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, state *State, stateFile, group string, items []string, fps int, sendProgress func(stage string, current, total int, desc string)) (failed int, total int, err error) {
 	framesDir := filepath.Join(workDir, "frames", group)
 	if err := os.MkdirAll(framesDir, 0o755); err != nil {
 		return 0, 0, fmt.Errorf("failed to create frames dir: %w", err)
@@ -700,12 +655,7 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 	if _, err := os.Stat(outputPath); err == nil && len(newFramePaths) > 0 {
 		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps...", len(newFramePaths), fps))
 		tmpOutput := outputPath + ".tmp.mp4"
-		preparedFrames, cleanup, err := prepareFrames(newFramePaths, server)
-		if err != nil {
-			return failed, total, fmt.Errorf("failed to prepare raw frames for %s: %w", group, err)
-		}
-		defer cleanup()
-		if err := encodeFrames(preparedFrames, tmpOutput, fps, crf, pixelFmt, func(current, total int) {
+		if err := encodeFrames(newFramePaths, tmpOutput, fps, func(current, total int) {
 			sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps... (preparing %d/%d)", len(newFramePaths), fps, current, total))
 		}); err != nil {
 			os.Remove(tmpOutput)
@@ -713,7 +663,7 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 		}
 		sendProgress("encode", 0, 1, fmt.Sprintf("Appending to existing %s...", outputPath))
 		concatOutput := outputPath + ".concat.mp4"
-		if err := concatVideos(outputPath, tmpOutput, concatOutput, crf, pixelFmt); err != nil {
+		if err := concatVideos(outputPath, tmpOutput, concatOutput); err != nil {
 			os.Remove(tmpOutput)
 			os.Remove(concatOutput)
 			return failed, total, fmt.Errorf("failed to concatenate video for %s: %w", group, err)
@@ -726,7 +676,7 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 		sendProgress("encode", 1, 1, fmt.Sprintf("Appended to %s", outputPath))
 	} else {
 		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps...", frameCount, fps))
-		if err := encodeVideo(framesDir, outputPath, fps, crf, pixelFmt, server, func(current, total int) {
+		if err := encodeVideo(framesDir, outputPath, fps, func(current, total int) {
 			sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps... (preparing %d/%d)", frameCount, fps, current, total))
 		}); err != nil {
 			return failed, total, fmt.Errorf("failed to encode video for %s: %w", group, err)
@@ -853,12 +803,7 @@ func isPackage(item string) bool {
 
 func isImageFile(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".jpg") ||
-		strings.HasSuffix(lower, ".jpeg") ||
-		strings.HasSuffix(lower, ".png") ||
-		strings.HasSuffix(lower, ".bmp") ||
-		strings.HasSuffix(lower, ".yuv") ||
-		strings.HasSuffix(lower, ".data")
+	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")
 }
 
 func downloadPhoto(server, photoPath, framesDir string, onProgress func(downloaded, total int64)) (string, error) {
@@ -972,99 +917,7 @@ func extractTarGz(archivePath, destDir string) ([]string, error) {
 	return extracted, nil
 }
 
-func fetchCameraConfig(server string) (width, height int, err error) {
-	url := server + "/api/v1/config"
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, fmt.Errorf("config status: %s", resp.Status)
-	}
-	var result struct {
-		Camera struct {
-			Width  *int `json:"width"`
-			Height *int `json:"height"`
-		} `json:"camera"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, 0, err
-	}
-	if result.Camera.Width == nil || result.Camera.Height == nil {
-		return 0, 0, fmt.Errorf("camera dimensions not configured")
-	}
-	return *result.Camera.Width, *result.Camera.Height, nil
-}
-
-func convertRawFrame(input, output string, width, height int, pixelFmt string) error {
-	cmd := exec.Command("ffmpeg",
-		"-y",
-		"-f", "rawvideo",
-		"-pixel_format", pixelFmt,
-		"-video_size", fmt.Sprintf("%dx%d", width, height),
-		"-i", input,
-		"-frames:v", "1",
-		output,
-	)
-	cmd.Stdout = log.Writer()
-	cmd.Stderr = log.Writer()
-	return cmd.Run()
-}
-
-func prepareFrames(frames []string, server string) ([]string, func(), error) {
-	var rawFrames []struct {
-		index int
-		path  string
-		fmt   string
-	}
-	for i, f := range frames {
-		lower := strings.ToLower(f)
-		if strings.HasSuffix(lower, ".yuv") {
-			rawFrames = append(rawFrames, struct {
-				index int
-				path  string
-				fmt   string
-			}{i, f, "yuv420p"})
-		} else if strings.HasSuffix(lower, ".data") {
-			rawFrames = append(rawFrames, struct {
-				index int
-				path  string
-				fmt   string
-			}{i, f, "rgb24"})
-		}
-	}
-	if len(rawFrames) == 0 {
-		return frames, func() {}, nil
-	}
-
-	width, height, err := fetchCameraConfig(server)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch camera config for raw frames: %w", err)
-	}
-
-	tmpDir, err := os.MkdirTemp("", "rspi_raw_conv_")
-	if err != nil {
-		return nil, nil, err
-	}
-	cleanup := func() { os.RemoveAll(tmpDir) }
-
-	result := make([]string, len(frames))
-	copy(result, frames)
-	for _, rf := range rawFrames {
-		base := strings.TrimSuffix(filepath.Base(rf.path), filepath.Ext(rf.path))
-		outPath := filepath.Join(tmpDir, base+".png")
-		if err := convertRawFrame(rf.path, outPath, width, height, rf.fmt); err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("failed to convert raw frame %s: %w", rf.path, err)
-		}
-		result[rf.index] = outPath
-	}
-	return result, cleanup, nil
-}
-
-func encodeVideo(framesDir, output string, fps int, crf int, pixelFmt string, server string, onProgress func(current, total int)) error {
+func encodeVideo(framesDir, output string, fps int, onProgress func(current, total int)) error {
 	entries, err := os.ReadDir(framesDir)
 	if err != nil {
 		return err
@@ -1083,12 +936,7 @@ func encodeVideo(framesDir, output string, fps int, crf int, pixelFmt string, se
 		return fmt.Errorf("no frames found in %s", framesDir)
 	}
 	sortFrames(frames)
-	frames, cleanup, err := prepareFrames(frames, server)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	return encodeFrames(frames, output, fps, crf, pixelFmt, onProgress)
+	return encodeFrames(frames, output, fps, onProgress)
 }
 
 func sortFrames(frames []string) {
@@ -1249,7 +1097,7 @@ func copyFrameFile(srcPath, dstPath string) error {
 	return nil
 }
 
-func encodeFrames(frames []string, output string, fps int, crf int, pixelFmt string, onProgress func(current, total int)) error {
+func encodeFrames(frames []string, output string, fps int, onProgress func(current, total int)) error {
 	encoder, err := findH264Encoder()
 	if err != nil {
 		return err
@@ -1284,32 +1132,25 @@ func encodeFrames(frames []string, output string, fps int, crf int, pixelFmt str
 		onProgress(len(frames), len(frames))
 	}
 
-	if pixelFmt == "" {
-		pixelFmt = "yuv420p"
-	}
-	log.Printf("encoding %d frames at %d fps using %s crf=%d pix_fmt=%s", len(frames), fps, encoder, crf, pixelFmt)
-	args := []string{
+	log.Printf("encoding %d frames at %d fps using %s", len(frames), fps, encoder)
+	cmd := exec.Command("ffmpeg",
 		"-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listFile,
 		"-c:v", encoder,
 		"-r", strconv.Itoa(fps),
-		"-pix_fmt", pixelFmt,
+		"-pix_fmt", "yuv420p",
 		"-vf", "scale=1920:-2",
 		"-movflags", "+faststart",
-	}
-	if crf >= 0 {
-		args = append(args, "-crf", strconv.Itoa(crf))
-	}
-	args = append(args, output)
-	cmd := exec.Command("ffmpeg", args...)
+		output,
+	)
 	cmd.Stdout = log.Writer()
 	cmd.Stderr = log.Writer()
 	return cmd.Run()
 }
 
-func concatVideos(videoA, videoB, output string, crf int, pixelFmt string) error {
+func concatVideos(videoA, videoB, output string) error {
 	listFile := output + ".concat.txt"
 	f, err := os.Create(listFile)
 	if err != nil {
@@ -1341,24 +1182,17 @@ func concatVideos(videoA, videoB, output string, crf int, pixelFmt string) error
 	err = cmd.Run()
 	if err != nil {
 		log.Printf("concat with copy failed, falling back to re-encode: %v", err)
-		if pixelFmt == "" {
-			pixelFmt = "yuv420p"
-		}
-		args := []string{
+		cmd = exec.Command("ffmpeg",
 			"-y",
 			"-i", videoA,
 			"-i", videoB,
 			"-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[outv]",
 			"-map", "[outv]",
 			"-c:v", encoder,
-			"-pix_fmt", pixelFmt,
+			"-pix_fmt", "yuv420p",
 			"-movflags", "+faststart",
-		}
-		if crf >= 0 {
-			args = append(args, "-crf", strconv.Itoa(crf))
-		}
-		args = append(args, output)
-		cmd = exec.Command("ffmpeg", args...)
+			output,
+		)
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
 		return cmd.Run()

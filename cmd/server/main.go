@@ -112,32 +112,10 @@ func saveConfig(path string, cfg Config) error {
 }
 
 func imageExtension() string {
-	enc := ""
-	if camCfg.Encoding != nil {
-		enc = strings.ToLower(*camCfg.Encoding)
-	}
-	switch enc {
-	case "png":
+	if camCfg.Encoding != nil && strings.ToLower(*camCfg.Encoding) == "png" {
 		return ".png"
-	case "bmp":
-		return ".bmp"
-	case "rgb", "rgb24", "rgb48":
-		return ".data"
-	case "yuv420":
-		return ".yuv"
-	default:
-		return ".jpg"
 	}
-}
-
-func isImageFile(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".jpg") ||
-		strings.HasSuffix(lower, ".jpeg") ||
-		strings.HasSuffix(lower, ".png") ||
-		strings.HasSuffix(lower, ".bmp") ||
-		strings.HasSuffix(lower, ".yuv") ||
-		strings.HasSuffix(lower, ".data")
+	return ".jpg"
 }
 
 func saveCameraConfig(path string, cfg camera.CameraConfig) error {
@@ -194,7 +172,7 @@ func packagePhotos(timelapseName string) error {
 			continue
 		}
 		name := entry.Name()
-		if !isImageFile(name) {
+		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") && !strings.HasSuffix(strings.ToLower(name), ".png") {
 			continue
 		}
 		info, err := entry.Info()
