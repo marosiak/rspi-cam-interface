@@ -640,7 +640,7 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			name := entry.Name()
-			if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+			if isImageFile(name) {
 				frameCount++
 			}
 		}
@@ -801,6 +801,11 @@ func isPackage(item string) bool {
 	return strings.HasSuffix(strings.ToLower(item), ".tar.gz")
 }
 
+func isImageFile(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")
+}
+
 func downloadPhoto(server, photoPath, framesDir string, onProgress func(downloaded, total int64)) (string, error) {
 	filename := path.Base(photoPath)
 	outputPath := filepath.Join(framesDir, filename)
@@ -923,7 +928,7 @@ func encodeVideo(framesDir, output string, fps int, onProgress func(current, tot
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+		if isImageFile(name) {
 			frames = append(frames, filepath.Join(framesDir, name))
 		}
 	}
@@ -969,7 +974,7 @@ func fillMissingFrames(framesDir string) error {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+		if !isImageFile(name) {
 			continue
 		}
 		framePath := filepath.Join(framesDir, name)

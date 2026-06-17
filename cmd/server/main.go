@@ -111,6 +111,13 @@ func saveConfig(path string, cfg Config) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+func imageExtension() string {
+	if camCfg.Encoding != nil && strings.ToLower(*camCfg.Encoding) == "png" {
+		return ".png"
+	}
+	return ".jpg"
+}
+
 func saveCameraConfig(path string, cfg camera.CameraConfig) error {
 	wrapper := struct {
 		Camera camera.CameraConfig `yaml:"camera"`
@@ -165,7 +172,7 @@ func packagePhotos(timelapseName string) error {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".jpg") {
+		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") && !strings.HasSuffix(strings.ToLower(name), ".png") {
 			continue
 		}
 		info, err := entry.Info()
@@ -295,7 +302,7 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 				log.Printf("timelapse failed to save config: %v", err)
 			}
 			cfgMu.Unlock()
-			filename := fmt.Sprintf("%s_%d.jpg", name, counter)
+			filename := fmt.Sprintf("%s_%d%s", name, counter, imageExtension())
 			outputPath := filepath.Join("./timelapse", filename)
 			if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 				log.Printf("timelapse failed to write image: %v", err)
@@ -584,7 +591,7 @@ func main() {
 					continue
 				}
 				name := entry.Name()
-				if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+				if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") || strings.HasSuffix(strings.ToLower(name), ".png") {
 					photos = append(photos, "/static/"+name)
 				}
 			}
