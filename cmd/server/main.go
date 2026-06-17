@@ -347,6 +347,28 @@ func parseTimelapseName(packageName string) (string, bool) {
 	return name, true
 }
 
+func parseTimelapsePhotoName(photoName string) (string, bool) {
+	lower := strings.ToLower(photoName)
+	if !strings.HasSuffix(lower, ".jpg") && !strings.HasSuffix(lower, ".jpeg") && !strings.HasSuffix(lower, ".png") {
+		return "", false
+	}
+	lastDot := strings.LastIndex(photoName, ".")
+	if lastDot <= 0 {
+		return "", false
+	}
+	stem := photoName[:lastDot]
+	lastUnderscore := strings.LastIndex(stem, "_")
+	if lastUnderscore <= 0 {
+		return "", false
+	}
+	counterStr := stem[lastUnderscore+1:]
+	var counter int
+	if _, err := fmt.Sscanf(counterStr, "%d", &counter); err != nil {
+		return "", false
+	}
+	return stem[:lastUnderscore], true
+}
+
 type TimelapseGroup struct {
 	Name            string        `json:"name"`
 	PackageCount    int           `json:"package_count"`
@@ -403,6 +425,41 @@ func listTimelapseGroups(sortBy string) ([]TimelapseGroup, error) {
 		}
 	}
 
+	timelapseDir := "./timelapse"
+	if photoEntries, err := os.ReadDir(timelapseDir); err == nil {
+		for _, entry := range photoEntries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			timelapseName, ok := parseTimelapsePhotoName(name)
+			if !ok {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			g, exists := groups[timelapseName]
+			if !exists {
+				g = &TimelapseGroup{
+					Name:         timelapseName,
+					EarliestTime: info.ModTime(),
+					LatestTime:   info.ModTime(),
+				}
+				groups[timelapseName] = g
+			}
+			g.PackageCount++
+			g.TotalSize += info.Size()
+			if info.ModTime().Before(g.EarliestTime) {
+				g.EarliestTime = info.ModTime()
+			}
+			if info.ModTime().After(g.LatestTime) {
+				g.LatestTime = info.ModTime()
+			}
+		}
+	}
+
 	result := make([]TimelapseGroup, 0, len(groups))
 	for _, g := range groups {
 		g.TotalSizeStr = formatBytes(g.TotalSize)
@@ -454,25 +511,43 @@ func formatDuration(d time.Duration) string {
 }
 
 func deleteTimelapse(name string) (int, error) {
-	packagesDir := "./packages"
-	entries, err := os.ReadDir(packagesDir)
-	if err != nil {
-		return 0, err
-	}
-
 	deleted := 0
-	prefix := fmt.Sprintf("timelapse_%s_", name)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		fname := entry.Name()
-		if strings.HasPrefix(fname, prefix) && strings.HasSuffix(fname, ".tar.gz") {
-			if err := os.Remove(filepath.Join(packagesDir, fname)); err == nil {
-				deleted++
+
+	packagesDir := "./packages"
+	if entries, err := os.ReadDir(packagesDir); err == nil {
+		prefix := fmt.Sprintf("timelapse_%s_", name)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fname := entry.Name()
+			if strings.HasPrefix(fname, prefix) && strings.HasSuffix(fname, ".tar.gz") {
+				if err := os.Remove(filepath.Join(packagesDir, fname)); err == nil {
+					deleted++
+				}
 			}
 		}
 	}
+
+	timelapseDir := "./timelapse"
+	if entries, err := os.ReadDir(timelapseDir); err == nil {
+		prefix := name + "_"
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fname := entry.Name()
+			if strings.HasPrefix(fname, prefix) {
+				lower := strings.ToLower(fname)
+				if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png") {
+					if err := os.Remove(filepath.Join(timelapseDir, fname)); err == nil {
+						deleted++
+					}
+				}
+			}
+		}
+	}
+
 	return deleted, nil
 }
 
