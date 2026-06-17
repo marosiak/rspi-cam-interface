@@ -517,7 +517,6 @@ func main() {
 	defer close(stopChan)
 
 	go startTimelapse(provider, stopChan)
-	go startPackager(stopChan)
 
 	engine := html.NewFileSystem(http.FS(templates.FS), ".gohtml")
 	app := fiber.New(fiber.Config{
@@ -531,6 +530,11 @@ func main() {
 		}
 
 		fullPath := filepath.Join("./packages", path)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			return c.SendFile(fullPath)
+		}
+
+		fullPath = filepath.Join("./timelapse", path)
 		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
 			return c.SendFile(fullPath)
 		}
@@ -559,24 +563,35 @@ func main() {
 	})
 
 	app.Get("/api/v1/timelapse", func(c fiber.Ctx) error {
-		packagesDir := "./packages"
-		entries, err := os.ReadDir(packagesDir)
-		if err != nil {
-			return c.JSON(fiber.Map{"packages": []string{}})
+		var packages []string
+		if entries, err := os.ReadDir("./packages"); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasPrefix(name, "timelapse_") && strings.HasSuffix(name, ".tar.gz") {
+					packages = append(packages, "/static/"+name)
+				}
+			}
 		}
+		sort.Strings(packages)
 
-		var urls []string
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if strings.HasPrefix(name, "timelapse_") && strings.HasSuffix(name, ".tar.gz") {
-				urls = append(urls, "/static/"+name)
+		var photos []string
+		if entries, err := os.ReadDir("./timelapse"); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+					photos = append(photos, "/static/"+name)
+				}
 			}
 		}
-		sort.Strings(urls)
-		return c.JSON(fiber.Map{"packages": urls})
+		sort.Strings(photos)
+
+		return c.JSON(fiber.Map{"packages": packages, "photos": photos})
 	})
 
 	app.Get("/api/v1/config", func(c fiber.Ctx) error {
