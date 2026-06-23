@@ -11,33 +11,27 @@ import (
 const maxReadings = 50
 
 type CameraTimeStats struct {
-	Avg   string   `json:"avg"`
-	Max   string   `json:"max"`
-	Min   string   `json:"min"`
-	Reads []string `json:"reads"`
+	Avg       int64   `json:"avg"`
+	Max       int64   `json:"max"`
+	Min       int64   `json:"min"`
+	Reads     []int64 `json:"reads"`
+	Timestamp int64   `json:"timestamp"`
 }
 
 type StatsTracker struct {
 	mu       sync.Mutex
 	readings []time.Duration
+	lastTime time.Time
 }
 
 func (st *StatsTracker) Record(d time.Duration) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.readings = append(st.readings, d)
+	st.lastTime = time.Now()
 	if len(st.readings) > maxReadings {
 		st.readings = st.readings[len(st.readings)-maxReadings:]
 	}
-}
-
-func formatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	s := d / time.Second
-	ms := (d % time.Second) / time.Millisecond
-	return fmt.Sprintf("%ds %dms", s, ms)
 }
 
 func (st *StatsTracker) Stats() CameraTimeStats {
@@ -45,13 +39,13 @@ func (st *StatsTracker) Stats() CameraTimeStats {
 	defer st.mu.Unlock()
 
 	if len(st.readings) == 0 {
-		return CameraTimeStats{Avg: "0ms", Max: "0ms", Min: "0ms", Reads: []string{}}
+		return CameraTimeStats{Avg: 0, Max: 0, Min: 0, Reads: []int64{}, Timestamp: st.lastTime.UnixMilli()}
 	}
 
 	var sum time.Duration
 	max := st.readings[0]
 	min := st.readings[0]
-	reads := make([]string, len(st.readings))
+	reads := make([]int64, len(st.readings))
 
 	for i, d := range st.readings {
 		sum += d
@@ -61,15 +55,16 @@ func (st *StatsTracker) Stats() CameraTimeStats {
 		if d < min {
 			min = d
 		}
-		reads[i] = formatDuration(d)
+		reads[i] = d.Milliseconds()
 	}
 
 	avg := sum / time.Duration(len(st.readings))
 	return CameraTimeStats{
-		Avg:   formatDuration(avg),
-		Max:   formatDuration(max),
-		Min:   formatDuration(min),
-		Reads: reads,
+		Avg:       avg.Milliseconds(),
+		Max:       max.Milliseconds(),
+		Min:       min.Milliseconds(),
+		Reads:     reads,
+		Timestamp: st.lastTime.UnixMilli(),
 	}
 }
 

@@ -49,6 +49,28 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Capture Stats -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title text-xl">Capture Stats</h2>
+                    <div class="grid grid-cols-3 gap-2 text-center">
+                        <div class="bg-base-200 rounded-lg p-2">
+                            <div class="text-xs text-base-content/60">Avg</div>
+                            <div id="stat-avg" class="text-lg font-semibold">-</div>
+                        </div>
+                        <div class="bg-base-200 rounded-lg p-2">
+                            <div class="text-xs text-base-content/60">Max</div>
+                            <div id="stat-max" class="text-lg font-semibold">-</div>
+                        </div>
+                        <div class="bg-base-200 rounded-lg p-2">
+                            <div class="text-xs text-base-content/60">Min</div>
+                            <div id="stat-min" class="text-lg font-semibold">-</div>
+                        </div>
+                    </div>
+                    <div class="text-xs text-base-content/50 mt-1 text-right" id="stat-timestamp">Last capture: -</div>
+                </div>
+            </div>
         </div>
 
         <!-- Config Panel -->
@@ -575,10 +597,40 @@ function refreshTimelapses() {
     loadTimelapses();
 }
 
+function formatMs(ms) {
+    if (ms >= 1000) {
+        return (ms / 1000).toFixed(2) + 's';
+    }
+    return ms + 'ms';
+}
+
+async function loadStats() {
+    try {
+        const resp = await fetch('/api/v1/stats');
+        const data = await resp.json();
+        const s = data.camera_time || {};
+        document.getElementById('stat-avg').textContent = formatMs(s.avg);
+        document.getElementById('stat-max').textContent = formatMs(s.max);
+        document.getElementById('stat-min').textContent = formatMs(s.min);
+        if (s.timestamp) {
+            const d = new Date(s.timestamp);
+            document.getElementById('stat-timestamp').textContent = 'Last capture: ' + d.toLocaleString();
+        } else {
+            document.getElementById('stat-timestamp').textContent = 'Last capture: -';
+        }
+    } catch (e) {
+        document.getElementById('stat-avg').textContent = '-';
+        document.getElementById('stat-max').textContent = '-';
+        document.getElementById('stat-min').textContent = '-';
+    }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     setupPreview();
     loadTimelapses();
+    loadStats();
+    setInterval(loadStats, 5000);
 });
 </script>
 
