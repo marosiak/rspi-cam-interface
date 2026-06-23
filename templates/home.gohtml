@@ -68,7 +68,22 @@
                             <div id="stat-min" class="text-lg font-semibold">-</div>
                         </div>
                     </div>
-                    <div class="text-xs text-base-content/50 mt-1 text-right" id="stat-timestamp">Last capture: -</div>
+                    <div class="flex justify-between items-center mt-1">
+                        <button onclick="toggleStatsTable()" class="btn btn-xs btn-ghost">Show more</button>
+                        <div class="text-xs text-base-content/50" id="stat-timestamp">Last capture: -</div>
+                    </div>
+                    <div id="stats-table-wrap" class="hidden mt-2 overflow-x-auto max-h-64 overflow-y-auto">
+                        <table class="table table-xs table-zebra w-full">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Time</th>
+                                    <th>Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stats-table-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -604,6 +619,18 @@ function formatMs(ms) {
     return ms + 'ms';
 }
 
+function toggleStatsTable() {
+    const wrap = document.getElementById('stats-table-wrap');
+    const btn = document.querySelector('button[onclick="toggleStatsTable()"]');
+    if (wrap.classList.contains('hidden')) {
+        wrap.classList.remove('hidden');
+        btn.textContent = 'Show less';
+    } else {
+        wrap.classList.add('hidden');
+        btn.textContent = 'Show more';
+    }
+}
+
 async function loadStats() {
     try {
         const resp = await fetch('/api/v1/stats');
@@ -618,10 +645,23 @@ async function loadStats() {
         } else {
             document.getElementById('stat-timestamp').textContent = 'Last capture: -';
         }
+        const tbody = document.getElementById('stats-table-body');
+        if (s.reads && s.reads.length > 0) {
+            let rows = '';
+            for (let i = s.reads.length - 1; i >= 0; i--) {
+                const r = s.reads[i];
+                const t = new Date(r.timestamp);
+                rows += '<tr><td>' + (i + 1) + '</td><td>' + t.toLocaleString() + '</td><td>' + formatMs(r.duration) + '</td></tr>';
+            }
+            tbody.innerHTML = rows;
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-base-content/50">No data</td></tr>';
+        }
     } catch (e) {
         document.getElementById('stat-avg').textContent = '-';
         document.getElementById('stat-max').textContent = '-';
         document.getElementById('stat-min').textContent = '-';
+        document.getElementById('stats-table-body').innerHTML = '<tr><td colspan="3" class="text-center text-base-content/50">No data</td></tr>';
     }
 }
 

@@ -10,25 +10,36 @@ import (
 
 const maxReadings = 50
 
+type CameraTimeReading struct {
+	Duration  int64 `json:"duration"`
+	Timestamp int64 `json:"timestamp"`
+}
+
 type CameraTimeStats struct {
-	Avg       int64   `json:"avg"`
-	Max       int64   `json:"max"`
-	Min       int64   `json:"min"`
-	Reads     []int64 `json:"reads"`
-	Timestamp int64   `json:"timestamp"`
+	Avg       int64               `json:"avg"`
+	Max       int64               `json:"max"`
+	Min       int64               `json:"min"`
+	Reads     []CameraTimeReading `json:"reads"`
+	Timestamp int64               `json:"timestamp"`
+}
+
+type readingEntry struct {
+	duration time.Duration
+	time     time.Time
 }
 
 type StatsTracker struct {
 	mu       sync.Mutex
-	readings []time.Duration
+	readings []readingEntry
 	lastTime time.Time
 }
 
 func (st *StatsTracker) Record(d time.Duration) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	st.readings = append(st.readings, d)
-	st.lastTime = time.Now()
+	now := time.Now()
+	st.readings = append(st.readings, readingEntry{duration: d, time: now})
+	st.lastTime = now
 	if len(st.readings) > maxReadings {
 		st.readings = st.readings[len(st.readings)-maxReadings:]
 	}
@@ -39,23 +50,26 @@ func (st *StatsTracker) Stats() CameraTimeStats {
 	defer st.mu.Unlock()
 
 	if len(st.readings) == 0 {
-		return CameraTimeStats{Avg: 0, Max: 0, Min: 0, Reads: []int64{}, Timestamp: st.lastTime.UnixMilli()}
+		return CameraTimeStats{Avg: 0, Max: 0, Min: 0, Reads: []CameraTimeReading{}, Timestamp: st.lastTime.UnixMilli()}
 	}
 
 	var sum time.Duration
-	max := st.readings[0]
-	min := st.readings[0]
-	reads := make([]int64, len(st.readings))
+	max := st.readings[0].duration
+	min := st.readings[0].duration
+	reads := make([]CameraTimeReading, len(st.readings))
 
-	for i, d := range st.readings {
-		sum += d
-		if d > max {
-			max = d
+	for i, r := range st.readings {
+		sum += r.duration
+		if r.duration > max {
+			max = r.duration
 		}
-		if d < min {
-			min = d
+		if r.duration < min {
+			min = r.duration
 		}
-		reads[i] = d.Milliseconds()
+		reads[i] = CameraTimeReading{
+			Duration:  r.duration.Milliseconds(),
+			Timestamp: r.time.UnixMilli(),
+		}
 	}
 
 	avg := sum / time.Duration(len(st.readings))
