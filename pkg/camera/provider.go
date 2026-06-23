@@ -8,12 +8,78 @@ import (
 	"time"
 )
 
+const maxReadings = 50
+
+type CameraTimeStats struct {
+	Avg   string   `json:"avg"`
+	Max   string   `json:"max"`
+	Min   string   `json:"min"`
+	Reads []string `json:"reads"`
+}
+
+type StatsTracker struct {
+	mu       sync.Mutex
+	readings []time.Duration
+}
+
+func (st *StatsTracker) Record(d time.Duration) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.readings = append(st.readings, d)
+	if len(st.readings) > maxReadings {
+		st.readings = st.readings[len(st.readings)-maxReadings:]
+	}
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	s := d / time.Second
+	ms := (d % time.Second) / time.Millisecond
+	return fmt.Sprintf("%ds %dms", s, ms)
+}
+
+func (st *StatsTracker) Stats() CameraTimeStats {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	if len(st.readings) == 0 {
+		return CameraTimeStats{Avg: "0ms", Max: "0ms", Min: "0ms", Reads: []string{}}
+	}
+
+	var sum time.Duration
+	max := st.readings[0]
+	min := st.readings[0]
+	reads := make([]string, len(st.readings))
+
+	for i, d := range st.readings {
+		sum += d
+		if d > max {
+			max = d
+		}
+		if d < min {
+			min = d
+		}
+		reads[i] = formatDuration(d)
+	}
+
+	avg := sum / time.Duration(len(st.readings))
+	return CameraTimeStats{
+		Avg:   formatDuration(avg),
+		Max:   formatDuration(max),
+		Min:   formatDuration(min),
+		Reads: reads,
+	}
+}
+
 type Provider interface {
 	Start() error
 	Stop()
 	LatestImage() ([]byte, error)
 	SetArgs(args []string)
 	SetRate(rate time.Duration)
+	Stats() CameraTimeStats
 }
 
 type RspiCameraProvider struct {
@@ -23,6 +89,7 @@ type RspiCameraProvider struct {
 	latest   []byte
 	stopChan chan struct{}
 	rateChan chan time.Duration
+	stats    StatsTracker
 }
 
 func (p *RspiCameraProvider) SetArgs(args []string) {
@@ -90,11 +157,15 @@ func (p *RspiCameraProvider) capture() {
 	p.mu.Unlock()
 	args = append(args, "--output", "-")
 
+	start := time.Now()
 	cmd := exec.Command("rpicam-still", args...)
 	data, err := cmd.Output()
+	elapsed := time.Since(start)
 	if err != nil {
 		return
 	}
+
+	p.stats.Record(elapsed)
 
 	p.mu.Lock()
 	p.latest = data
@@ -114,6 +185,10 @@ func (p *RspiCameraProvider) LatestImage() ([]byte, error) {
 	return data, nil
 }
 
+func (p *RspiCameraProvider) Stats() CameraTimeStats {
+	return p.stats.Stats()
+}
+
 type MockCameraProvider struct {
 	sourcePath string
 	latest     []byte
@@ -121,6 +196,7 @@ type MockCameraProvider struct {
 	mu         sync.Mutex
 	stopChan   chan struct{}
 	rateChan   chan time.Duration
+	stats      StatsTracker
 }
 
 func NewMockCameraProvider(rate time.Duration) *MockCameraProvider {
@@ -181,10 +257,14 @@ func (p *MockCameraProvider) worker() {
 }
 
 func (p *MockCameraProvider) capture() {
+	start := time.Now()
 	data, err := os.ReadFile(p.sourcePath)
+	elapsed := time.Since(start)
 	if err != nil {
 		return
 	}
+
+	p.stats.Record(elapsed)
 
 	p.mu.Lock()
 	p.latest = data
@@ -202,4 +282,8 @@ func (p *MockCameraProvider) LatestImage() ([]byte, error) {
 	data := make([]byte, len(p.latest))
 	copy(data, p.latest)
 	return data, nil
+}
+
+func (p *MockCameraProvider) Stats() CameraTimeStats {
+	return p.stats.Stats()
 }

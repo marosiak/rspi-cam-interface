@@ -713,7 +713,17 @@ func extractGroup(itemPath string) string {
 		return stripped
 	}
 
-	// Photo format: name_NN.jpg
+	// Photo format: /static/<group>/<filename>.jpg
+	// Group is the directory name under /static
+	dir := path.Dir(itemPath)
+	if dir != "." && dir != "/" {
+		group := path.Base(dir)
+		if group != "." && group != "/" && group != "static" {
+			return group
+		}
+	}
+
+	// Fallback for legacy photo naming: name_NN.jpg
 	ext := filepath.Ext(basename)
 	stripped := strings.TrimSuffix(basename, ext)
 	parts := strings.Split(stripped, "_")

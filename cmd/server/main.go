@@ -616,6 +616,12 @@ func main() {
 		return c.SendString("OK")
 	})
 
+	app.Get("/api/v1/stats", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"camera_time": provider.Stats(),
+		})
+	})
+
 	app.Get("/api/v1/photo", func(c fiber.Ctx) error {
 		data, err := provider.LatestImage()
 		if err != nil {
