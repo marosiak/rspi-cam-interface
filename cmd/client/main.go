@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,13 +27,14 @@ import (
 
 type State struct {
 	Packages map[string]bool `json:"packages"`
+	Photos   map[string]bool `json:"photos"`
 }
 
 func loadState(path string) (*State, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &State{Packages: make(map[string]bool)}, nil
+			return &State{Packages: make(map[string]bool), Photos: make(map[string]bool)}, nil
 		}
 		return nil, err
 	}
@@ -42,6 +44,9 @@ func loadState(path string) (*State, error) {
 	}
 	if s.Packages == nil {
 		s.Packages = make(map[string]bool)
+	}
+	if s.Photos == nil {
+		s.Photos = make(map[string]bool)
 	}
 	return &s, nil
 }
@@ -77,6 +82,9 @@ type model struct {
 	progressCh     chan tea.Msg
 	progressState  map[string]progressInfo
 	groupStartTime time.Time
+
+	totalFailedPackages int
+	totalPackages       int
 }
 
 type progressInfo struct {
@@ -95,8 +103,10 @@ type processProgressMsg struct {
 }
 
 type processDoneMsg struct {
-	group string
-	err   error
+	group  string
+	err    error
+	failed int
+	total  int
 }
 
 // --- Init ---
@@ -149,6 +159,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case processDoneMsg:
 		m.processingIdx++
+		m.totalFailedPackages += msg.failed
+		m.totalPackages += msg.total
 		if msg.err != nil {
 			m.errGroups[msg.group] = msg.err
 		} else {
@@ -184,7 +196,7 @@ func (m model) processNext() (model, tea.Cmd) {
 	m.currentGroup = group
 
 	go func() {
-		err := processGroupWorkWithProgress(m.server, m.outputDir, m.workDir, m.keep, m.state, m.stateFile, group, m.groups[group], m.fps, func(stage string, current, total int, desc string) {
+		failed, total, err := processGroupWorkWithProgress(m.server, m.outputDir, m.workDir, m.keep, m.state, m.stateFile, group, m.groups[group], m.fps, func(stage string, current, total int, desc string) {
 			m.progressCh <- processProgressMsg{
 				group:       group,
 				stage:       stage,
@@ -193,7 +205,7 @@ func (m model) processNext() (model, tea.Cmd) {
 				description: desc,
 			}
 		})
-		m.progressCh <- processDoneMsg{group: group, err: err}
+		m.progressCh <- processDoneMsg{group: group, err: err, failed: failed, total: total}
 	}()
 
 	return m, func() tea.Msg {
@@ -288,6 +300,10 @@ func (m model) View() tea.View {
 	}
 
 	if m.processingIdx >= len(m.selectedGroups) && len(m.selectedGroups) > 0 {
+		if m.totalPackages > 0 {
+			failPct := float64(m.totalFailedPackages) / float64(m.totalPackages) * 100
+			s.WriteString(fmt.Sprintf("\nPackages: %d/%d failed (%.1f%%)\n", m.totalFailedPackages, m.totalPackages, failPct))
+		}
 		s.WriteString("\n" + helpStyle.Render("All done! Press q to quit."))
 	} else {
 		s.WriteString("\n" + helpStyle.Render("Press q to quit."))
@@ -357,16 +373,17 @@ func main() {
 		log.Fatalf("failed to load state: %v", err)
 	}
 
-	packages, err := fetchPackageList(server)
+	packages, photos, err := fetchPackageList(server)
 	if err != nil {
 		log.Fatalf("failed to fetch package list: %v", err)
 	}
-	if len(packages) == 0 {
-		fmt.Println("no packages found")
+	allItems := append(packages, photos...)
+	if len(allItems) == 0 {
+		fmt.Println("no packages or photos found")
 		return
 	}
 
-	groups := groupPackages(packages)
+	groups := groupItems(allItems)
 
 	groupNames := make([]string, 0, len(groups))
 	for name := range groups {
@@ -379,16 +396,22 @@ func main() {
 	for _, name := range groupNames {
 		count := len(groups[name])
 		newCount := 0
-		for _, pkg := range groups[name] {
-			if !state.Packages[pkg] {
-				newCount++
+		for _, item := range groups[name] {
+			if isPackage(item) {
+				if !state.Packages[item] {
+					newCount++
+				}
+			} else {
+				if !state.Photos[item] {
+					newCount++
+				}
 			}
 		}
 		var label string
 		if newCount == 0 {
-			label = fmt.Sprintf("%s (%d packages, all done)", name, count)
+			label = fmt.Sprintf("%s (%d items, all done)", name, count)
 		} else {
-			label = fmt.Sprintf("%s (%d packages, %d new)", name, count, newCount)
+			label = fmt.Sprintf("%s (%d items, %d new)", name, count, newCount)
 		}
 		opt := huh.NewOption(label, name).Selected(newCount > 0)
 		groupOptions = append(groupOptions, opt)
@@ -494,89 +517,140 @@ func main() {
 
 // --- Work functions ---
 
-func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, state *State, stateFile, group string, packages []string, fps int, sendProgress func(stage string, current, total int, desc string)) error {
+func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, state *State, stateFile, group string, items []string, fps int, sendProgress func(stage string, current, total int, desc string)) (failed int, total int, err error) {
 	framesDir := filepath.Join(workDir, "frames", group)
 	if err := os.MkdirAll(framesDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create frames dir: %w", err)
+		return 0, 0, fmt.Errorf("failed to create frames dir: %w", err)
 	}
 
-	newPackages := make([]string, 0, len(packages))
-	for _, pkg := range packages {
-		if !state.Packages[pkg] {
-			newPackages = append(newPackages, pkg)
+	var newItems []string
+	for _, item := range items {
+		if isPackage(item) {
+			if !state.Packages[item] {
+				newItems = append(newItems, item)
+			}
+		} else {
+			if !state.Photos[item] {
+				newItems = append(newItems, item)
+			}
 		}
 	}
+	total = len(newItems)
 
 	outputPath := filepath.Join(outputDir, group+".mp4")
 
-	if len(newPackages) == 0 {
+	if len(newItems) == 0 {
 		entries, err := os.ReadDir(framesDir)
 		if err != nil || len(entries) == 0 {
-			return fmt.Errorf("no frames for %s, skipping encoding", group)
+			return 0, 0, fmt.Errorf("no frames for %s, skipping encoding", group)
 		}
 		if _, err := os.Stat(outputPath); err == nil {
-			return nil
+			return 0, 0, nil
 		}
 	}
 
 	var newFramePaths []string
-	for i, pkg := range newPackages {
-		filename := path.Base(pkg)
+	for i, item := range newItems {
+		filename := path.Base(item)
 
 		lastUpdate := time.Now()
-		sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s...", filename))
-		archivePath, err := downloadFile(server, pkg, workDir, func(downloaded, total int64) {
-			if time.Since(lastUpdate) > 200*time.Millisecond {
-				if total > 0 {
-					pct := float64(downloaded) / float64(total) * 100
-					sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s (%.0f%%)", filename, pct))
-				} else {
-					sendProgress("download", i, len(newPackages), fmt.Sprintf("Downloading %s (%s)", filename, humanizeBytes(downloaded)))
+		sendProgress("download", i, len(newItems), fmt.Sprintf("Downloading %s...", filename))
+
+		if isPackage(item) {
+			archivePath, err := downloadFile(server, item, workDir, func(downloaded, totalSize int64) {
+				if time.Since(lastUpdate) > 200*time.Millisecond {
+					if totalSize > 0 {
+						pct := float64(downloaded) / float64(totalSize) * 100
+						sendProgress("download", i, len(newItems), fmt.Sprintf("Downloading %s (%.0f%%)", filename, pct))
+					} else {
+						sendProgress("download", i, len(newItems), fmt.Sprintf("Downloading %s (%s)", filename, humanizeBytes(downloaded)))
+					}
+					lastUpdate = time.Now()
 				}
-				lastUpdate = time.Now()
+			})
+			if err != nil {
+				log.Printf("failed to download %s: %v", item, err)
+				failed++
+				continue
 			}
-		})
-		if err != nil {
-			return fmt.Errorf("failed to download %s: %w", pkg, err)
-		}
-		sendProgress("download", i+1, len(newPackages), fmt.Sprintf("Downloaded %s", filename))
+			sendProgress("download", i+1, len(newItems), fmt.Sprintf("Downloaded %s", filename))
 
-		sendProgress("extract", i, len(newPackages), fmt.Sprintf("Extracting %s...", filename))
-		extracted, err := extractTarGz(archivePath, framesDir)
-		if err != nil {
+			sendProgress("extract", i, len(newItems), fmt.Sprintf("Extracting %s...", filename))
+			extracted, err := extractTarGz(archivePath, framesDir)
+			if err != nil {
+				os.Remove(archivePath)
+				log.Printf("failed to extract %s: %v", item, err)
+				failed++
+				continue
+			}
 			os.Remove(archivePath)
-			return fmt.Errorf("failed to extract %s: %w", pkg, err)
-		}
-		os.Remove(archivePath)
-		newFramePaths = append(newFramePaths, extracted...)
-		sendProgress("extract", i+1, len(newPackages), fmt.Sprintf("Extracted %s", filename))
+			newFramePaths = append(newFramePaths, extracted...)
+			sendProgress("extract", i+1, len(newItems), fmt.Sprintf("Extracted %s", filename))
 
-		state.Packages[pkg] = true
-		if err := state.save(stateFile); err != nil {
-			return fmt.Errorf("failed to save state: %w", err)
+			state.Packages[item] = true
+			if err := state.save(stateFile); err != nil {
+				return failed, total, fmt.Errorf("failed to save state: %w", err)
+			}
+		} else {
+			photoPath, err := downloadPhoto(server, item, framesDir, func(downloaded, totalSize int64) {
+				if time.Since(lastUpdate) > 200*time.Millisecond {
+					if totalSize > 0 {
+						pct := float64(downloaded) / float64(totalSize) * 100
+						sendProgress("download", i, len(newItems), fmt.Sprintf("Downloading %s (%.0f%%)", filename, pct))
+					} else {
+						sendProgress("download", i, len(newItems), fmt.Sprintf("Downloading %s (%s)", filename, humanizeBytes(downloaded)))
+					}
+					lastUpdate = time.Now()
+				}
+			})
+			if err != nil {
+				log.Printf("failed to download %s: %v", item, err)
+				failed++
+				continue
+			}
+			newFramePaths = append(newFramePaths, photoPath)
+			sendProgress("download", i+1, len(newItems), fmt.Sprintf("Downloaded %s", filename))
+
+			state.Photos[item] = true
+			if err := state.save(stateFile); err != nil {
+				return failed, total, fmt.Errorf("failed to save state: %w", err)
+			}
 		}
+	}
+
+	// If no new frames were successfully added and output already exists, skip encoding
+	if len(newFramePaths) == 0 {
+		if _, err := os.Stat(outputPath); err == nil {
+			return failed, total, nil
+		}
+	}
+
+	// Fill any missing frames so ffmpeg receives a contiguous sequence
+	sendProgress("encode", 0, 1, fmt.Sprintf("Checking for missing frames in %s...", group))
+	if err := fillMissingFrames(framesDir); err != nil {
+		return failed, total, fmt.Errorf("failed to fill missing frames for %s: %w", group, err)
 	}
 
 	// Count frames
 	entries, err := os.ReadDir(framesDir)
 	if err != nil {
-		return err
+		return failed, total, err
 	}
 	frameCount := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			name := entry.Name()
-			if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+			if isImageFile(name) {
 				frameCount++
 			}
 		}
 	}
 	if frameCount == 0 {
-		return fmt.Errorf("no frames found in %s", framesDir)
+		return failed, total, fmt.Errorf("no frames found in %s", framesDir)
 	}
 
 	// Sort new frame paths to ensure chronological order across packages
-	sort.Strings(newFramePaths)
+	sortFrames(newFramePaths)
 
 	if _, err := os.Stat(outputPath); err == nil && len(newFramePaths) > 0 {
 		sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps...", len(newFramePaths), fps))
@@ -585,19 +659,19 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 			sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d new frames at %d fps... (preparing %d/%d)", len(newFramePaths), fps, current, total))
 		}); err != nil {
 			os.Remove(tmpOutput)
-			return fmt.Errorf("failed to encode new frames for %s: %w", group, err)
+			return failed, total, fmt.Errorf("failed to encode new frames for %s: %w", group, err)
 		}
 		sendProgress("encode", 0, 1, fmt.Sprintf("Appending to existing %s...", outputPath))
 		concatOutput := outputPath + ".concat.mp4"
 		if err := concatVideos(outputPath, tmpOutput, concatOutput); err != nil {
 			os.Remove(tmpOutput)
 			os.Remove(concatOutput)
-			return fmt.Errorf("failed to concatenate video for %s: %w", group, err)
+			return failed, total, fmt.Errorf("failed to concatenate video for %s: %w", group, err)
 		}
 		os.Remove(tmpOutput)
 		if err := os.Rename(concatOutput, outputPath); err != nil {
 			os.Remove(concatOutput)
-			return fmt.Errorf("failed to replace output video: %w", err)
+			return failed, total, fmt.Errorf("failed to replace output video: %w", err)
 		}
 		sendProgress("encode", 1, 1, fmt.Sprintf("Appended to %s", outputPath))
 	} else {
@@ -605,19 +679,19 @@ func processGroupWorkWithProgress(server, outputDir, workDir string, keep bool, 
 		if err := encodeVideo(framesDir, outputPath, fps, func(current, total int) {
 			sendProgress("encode", 0, 1, fmt.Sprintf("Encoding %d frames at %d fps... (preparing %d/%d)", frameCount, fps, current, total))
 		}); err != nil {
-			return fmt.Errorf("failed to encode video for %s: %w", group, err)
+			return failed, total, fmt.Errorf("failed to encode video for %s: %w", group, err)
 		}
 		sendProgress("encode", 1, 1, fmt.Sprintf("Encoded %s", outputPath))
 	}
 	log.Printf("video saved to %s", outputPath)
-	return nil
+	return failed, total, nil
 }
 
-func groupPackages(packages []string) map[string][]string {
+func groupItems(items []string) map[string][]string {
 	groups := make(map[string][]string)
-	for _, pkg := range packages {
-		group := extractGroup(pkg)
-		groups[group] = append(groups[group], pkg)
+	for _, item := range items {
+		group := extractGroup(item)
+		groups[group] = append(groups[group], item)
 	}
 	for group := range groups {
 		sort.Strings(groups[group])
@@ -625,40 +699,61 @@ func groupPackages(packages []string) map[string][]string {
 	return groups
 }
 
-func extractGroup(pkgPath string) string {
-	basename := path.Base(pkgPath)
-	if !strings.HasPrefix(basename, "timelapse_") || !strings.HasSuffix(basename, ".tar.gz") {
-		return "timelapse"
-	}
-	stripped := strings.TrimPrefix(basename, "timelapse_")
-	stripped = strings.TrimSuffix(stripped, ".tar.gz")
-	parts := strings.Split(stripped, "_")
-	if len(parts) < 2 {
+func extractGroup(itemPath string) string {
+	basename := path.Base(itemPath)
+
+	// Legacy package format: timelapse_name_NN.tar.gz
+	if strings.HasPrefix(basename, "timelapse_") && strings.HasSuffix(basename, ".tar.gz") {
+		stripped := strings.TrimPrefix(basename, "timelapse_")
+		stripped = strings.TrimSuffix(stripped, ".tar.gz")
+		parts := strings.Split(stripped, "_")
+		if len(parts) >= 2 {
+			return strings.Join(parts[:len(parts)-1], "_")
+		}
 		return stripped
 	}
-	return strings.Join(parts[:len(parts)-1], "_")
+
+	// Photo format: /static/<group>/<filename>.jpg
+	// Group is the directory name under /static
+	dir := path.Dir(itemPath)
+	if dir != "." && dir != "/" {
+		group := path.Base(dir)
+		if group != "." && group != "/" && group != "static" {
+			return group
+		}
+	}
+
+	// Fallback for legacy photo naming: name_NN.jpg
+	ext := filepath.Ext(basename)
+	stripped := strings.TrimSuffix(basename, ext)
+	parts := strings.Split(stripped, "_")
+	if len(parts) >= 2 {
+		return strings.Join(parts[:len(parts)-1], "_")
+	}
+	return stripped
 }
 
-func fetchPackageList(server string) ([]string, error) {
+func fetchPackageList(server string) ([]string, []string, error) {
 	url := server + "/api/v1/timelapse"
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %s", resp.Status)
+		return nil, nil, fmt.Errorf("unexpected status: %s", resp.Status)
 	}
 
 	var result struct {
 		Packages []string `json:"packages"`
+		Photos   []string `json:"photos"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return result.Packages, nil
+	return result.Packages, result.Photos, nil
 }
 
 func downloadFile(server, pkgPath, workDir string, onProgress func(downloaded, total int64)) (string, error) {
@@ -710,6 +805,66 @@ func downloadFile(server, pkgPath, workDir string, onProgress func(downloaded, t
 	}
 
 	return archivePath, nil
+}
+
+func isPackage(item string) bool {
+	return strings.HasSuffix(strings.ToLower(item), ".tar.gz")
+}
+
+func isImageFile(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".png")
+}
+
+func downloadPhoto(server, photoPath, framesDir string, onProgress func(downloaded, total int64)) (string, error) {
+	filename := path.Base(photoPath)
+	outputPath := filepath.Join(framesDir, filename)
+
+	url := server + photoPath
+	log.Printf("downloading %s", url)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download status: %s", resp.Status)
+	}
+
+	total := resp.ContentLength
+
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var downloaded int64
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			_, werr := f.Write(buf[:n])
+			if werr != nil {
+				return "", werr
+			}
+			downloaded += int64(n)
+			if onProgress != nil {
+				onProgress(downloaded, total)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return outputPath, nil
 }
 
 func downloadAndExtract(server, pkgPath, workDir, framesDir string) ([]string, error) {
@@ -783,15 +938,173 @@ func encodeVideo(framesDir, output string, fps int, onProgress func(current, tot
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") {
+		if isImageFile(name) {
 			frames = append(frames, filepath.Join(framesDir, name))
 		}
 	}
 	if len(frames) == 0 {
 		return fmt.Errorf("no frames found in %s", framesDir)
 	}
-	sort.Strings(frames)
+	sortFrames(frames)
 	return encodeFrames(frames, output, fps, onProgress)
+}
+
+func sortFrames(frames []string) {
+	sort.Slice(frames, func(i, j int) bool {
+		return frameNumber(frames[i]) < frameNumber(frames[j])
+	})
+}
+
+func frameNumber(path string) int {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	parts := strings.Split(base, "_")
+	if len(parts) > 0 {
+		if n, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+type frameInfo struct {
+	path   string
+	number int
+	size   int64
+}
+
+func fillMissingFrames(framesDir string) error {
+	entries, err := os.ReadDir(framesDir)
+	if err != nil {
+		return err
+	}
+
+	var frames []frameInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isImageFile(name) {
+			continue
+		}
+		framePath := filepath.Join(framesDir, name)
+		info, err := os.Stat(framePath)
+		if err != nil {
+			continue
+		}
+		frames = append(frames, frameInfo{
+			path:   framePath,
+			number: frameNumber(name),
+			size:   info.Size(),
+		})
+	}
+	if len(frames) == 0 {
+		return nil
+	}
+
+	sort.Slice(frames, func(i, j int) bool {
+		return frames[i].number < frames[j].number
+	})
+
+	minNum := frames[0].number
+	maxNum := frames[len(frames)-1].number
+
+	// Build map of valid (non-zero-byte) frames
+	validFrameByNum := make(map[int]frameInfo)
+	for _, f := range frames {
+		if f.size > 0 {
+			validFrameByNum[f.number] = f
+		}
+	}
+
+	// Determine prefix and ext from the first valid frame, or first frame if all are broken
+	var firstFrame frameInfo
+	for _, f := range frames {
+		if f.size > 0 {
+			firstFrame = f
+			break
+		}
+	}
+	if firstFrame.path == "" {
+		firstFrame = frames[0]
+	}
+
+	base := strings.TrimSuffix(filepath.Base(firstFrame.path), filepath.Ext(firstFrame.path))
+	prefix := base
+	if idx := strings.LastIndex(base, "_"); idx >= 0 {
+		prefix = base[:idx]
+	}
+	ext := filepath.Ext(firstFrame.path)
+
+	// First pass: fix broken (0-byte) frames
+	for _, f := range frames {
+		if f.size > 0 {
+			continue
+		}
+		sourcePath := findNearestValidFrame(validFrameByNum, f.number, minNum, maxNum)
+		if sourcePath == "" {
+			continue
+		}
+		if err := copyFrameFile(sourcePath, f.path); err != nil {
+			return err
+		}
+		validFrameByNum[f.number] = frameInfo{path: f.path, number: f.number, size: 1}
+		log.Printf("replaced broken frame %s from %s", f.path, sourcePath)
+	}
+
+	// Second pass: fill missing sequence numbers
+	for n := minNum; n <= maxNum; n++ {
+		if _, ok := validFrameByNum[n]; ok {
+			continue
+		}
+		sourcePath := findNearestValidFrame(validFrameByNum, n, minNum, maxNum)
+		if sourcePath == "" {
+			continue
+		}
+		newName := fmt.Sprintf("%s_%d%s", prefix, n, ext)
+		newPath := filepath.Join(framesDir, newName)
+		if err := copyFrameFile(sourcePath, newPath); err != nil {
+			return err
+		}
+		validFrameByNum[n] = frameInfo{path: newPath, number: n, size: 1}
+		log.Printf("filled missing frame %s from %s", newPath, sourcePath)
+	}
+
+	return nil
+}
+
+func findNearestValidFrame(validFrameByNum map[int]frameInfo, target, minNum, maxNum int) string {
+	maxOffset := maxNum - minNum
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	for offset := 1; offset <= maxOffset; offset++ {
+		if prev, ok := validFrameByNum[target-offset]; ok {
+			return prev.path
+		}
+		if next, ok := validFrameByNum[target+offset]; ok {
+			return next.path
+		}
+	}
+	return ""
+}
+
+func copyFrameFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source frame %s: %w", srcPath, err)
+	}
+	defer src.Close()
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("failed to create frame %s: %w", dstPath, err)
+	}
+	defer dst.Close()
+	_, err = io.Copy(dst, src)
+	if err != nil {
+		return fmt.Errorf("failed to copy frame to %s: %w", dstPath, err)
+	}
+	return nil
 }
 
 func encodeFrames(frames []string, output string, fps int, onProgress func(current, total int)) error {
@@ -800,33 +1113,44 @@ func encodeFrames(frames []string, output string, fps int, onProgress func(curre
 		return err
 	}
 
-	tmpDir, err := os.MkdirTemp("", "timelapse_frames_*")
+	sortFrames(frames)
+
+	listFile := output + ".frames.txt"
+	f, err := os.Create(listFile)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	duration := fmt.Sprintf("%.6f", 1.0/float64(fps))
+	for _, frame := range frames {
+		if _, err := fmt.Fprintf(f, "file '%s'\nduration %s\n", frame, duration); err != nil {
+			f.Close()
+			os.Remove(listFile)
+			return err
+		}
+	}
+	if len(frames) > 0 {
+		if _, err := fmt.Fprintf(f, "file '%s'\n", frames[len(frames)-1]); err != nil {
+			f.Close()
+			os.Remove(listFile)
+			return err
+		}
+	}
+	f.Close()
+	defer os.Remove(listFile)
 
-	for i, src := range frames {
-		dst := filepath.Join(tmpDir, fmt.Sprintf("frame_%06d.jpg", i))
-		if err := os.Link(src, dst); err != nil {
-			if err := copyFile(src, dst); err != nil {
-				return fmt.Errorf("failed to copy frame %s: %w", src, err)
-			}
-		}
-		if onProgress != nil {
-			onProgress(i+1, len(frames))
-		}
+	if onProgress != nil {
+		onProgress(len(frames), len(frames))
 	}
 
 	log.Printf("encoding %d frames at %d fps using %s", len(frames), fps, encoder)
-	pattern := filepath.Join(tmpDir, "frame_%06d.jpg")
 	cmd := exec.Command("ffmpeg",
 		"-y",
-		"-framerate", fmt.Sprintf("%d", fps),
-		"-i", pattern,
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listFile,
 		"-c:v", encoder,
+		"-r", strconv.Itoa(fps),
 		"-pix_fmt", "yuv420p",
-		"-vsync", "0",
 		"-vf", "scale=1920:-2",
 		"-movflags", "+faststart",
 		output,
@@ -834,21 +1158,6 @@ func encodeFrames(frames []string, output string, fps int, onProgress func(curre
 	cmd.Stdout = log.Writer()
 	cmd.Stderr = log.Writer()
 	return cmd.Run()
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
 }
 
 func concatVideos(videoA, videoB, output string) error {

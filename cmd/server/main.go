@@ -70,6 +70,7 @@ type Config struct {
 		Counter int      `yaml:"counter,omitempty" json:"counter,omitempty"`
 	} `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	CameraRefreshRate Duration `yaml:"camera_refresh_rate,omitempty" json:"camera_refresh_rate,omitempty"`
+	Port              int      `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 var (
@@ -110,6 +111,13 @@ func saveConfig(path string, cfg Config) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+func imageExtension() string {
+	if camCfg.Encoding != nil && strings.ToLower(*camCfg.Encoding) == "png" {
+		return ".png"
+	}
+	return ".jpg"
+}
+
 func saveCameraConfig(path string, cfg camera.CameraConfig) error {
 	wrapper := struct {
 		Camera camera.CameraConfig `yaml:"camera"`
@@ -144,7 +152,7 @@ func nextPackageNumber(packagesDir, timelapseName string) int {
 }
 
 func packagePhotos(timelapseName string) error {
-	timelapseDir := "./timelapse"
+	timelapseDir := filepath.Join("./timelapse", timelapseName)
 	packagesDir := "./packages"
 
 	if err := os.MkdirAll(packagesDir, 0o755); err != nil {
@@ -153,18 +161,20 @@ func packagePhotos(timelapseName string) error {
 
 	entries, err := os.ReadDir(timelapseDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 
 	var photos []string
-	prefix := timelapseName + "_"
 	now := time.Now()
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".jpg") {
+		if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") && !strings.HasSuffix(strings.ToLower(name), ".png") {
 			continue
 		}
 		info, err := entry.Info()
@@ -173,10 +183,8 @@ func packagePhotos(timelapseName string) error {
 		}
 		isOld := info.ModTime().Before(now.Add(-5 * time.Second))
 		isFuture := info.ModTime().After(now)
-		if strings.HasPrefix(name, prefix) && (isOld || isFuture) {
+		if isOld || isFuture {
 			photos = append(photos, filepath.Join(timelapseDir, name))
-		} else if !strings.HasPrefix(name, prefix) && isOld {
-			os.Remove(filepath.Join(timelapseDir, name))
 		}
 	}
 
@@ -276,8 +284,6 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
-	os.MkdirAll("./timelapse", 0o755)
-
 	for {
 		select {
 		case <-ticker.C:
@@ -294,8 +300,10 @@ func startTimelapse(provider camera.Provider, stopChan <-chan struct{}) {
 				log.Printf("timelapse failed to save config: %v", err)
 			}
 			cfgMu.Unlock()
-			filename := fmt.Sprintf("%s_%d.jpg", name, counter)
-			outputPath := filepath.Join("./timelapse", filename)
+			timelapseDir := filepath.Join("./timelapse", name)
+			os.MkdirAll(timelapseDir, 0o755)
+			filename := fmt.Sprintf("%d%s", counter, imageExtension())
+			outputPath := filepath.Join(timelapseDir, filename)
 			if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 				log.Printf("timelapse failed to write image: %v", err)
 			}
@@ -395,6 +403,51 @@ func listTimelapseGroups(sortBy string) ([]TimelapseGroup, error) {
 		}
 	}
 
+	timelapseDir := "./timelapse"
+	if groupDirs, err := os.ReadDir(timelapseDir); err == nil {
+		for _, groupDir := range groupDirs {
+			if !groupDir.IsDir() {
+				continue
+			}
+			timelapseName := groupDir.Name()
+			groupPath := filepath.Join(timelapseDir, timelapseName)
+			photoEntries, err := os.ReadDir(groupPath)
+			if err != nil {
+				continue
+			}
+			for _, entry := range photoEntries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if !strings.HasSuffix(strings.ToLower(name), ".jpg") && !strings.HasSuffix(strings.ToLower(name), ".jpeg") && !strings.HasSuffix(strings.ToLower(name), ".png") {
+					continue
+				}
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
+				g, exists := groups[timelapseName]
+				if !exists {
+					g = &TimelapseGroup{
+						Name:         timelapseName,
+						EarliestTime: info.ModTime(),
+						LatestTime:   info.ModTime(),
+					}
+					groups[timelapseName] = g
+				}
+				g.PackageCount++
+				g.TotalSize += info.Size()
+				if info.ModTime().Before(g.EarliestTime) {
+					g.EarliestTime = info.ModTime()
+				}
+				if info.ModTime().After(g.LatestTime) {
+					g.LatestTime = info.ModTime()
+				}
+			}
+		}
+	}
+
 	result := make([]TimelapseGroup, 0, len(groups))
 	for _, g := range groups {
 		g.TotalSizeStr = formatBytes(g.TotalSize)
@@ -446,25 +499,37 @@ func formatDuration(d time.Duration) string {
 }
 
 func deleteTimelapse(name string) (int, error) {
-	packagesDir := "./packages"
-	entries, err := os.ReadDir(packagesDir)
-	if err != nil {
-		return 0, err
-	}
-
 	deleted := 0
-	prefix := fmt.Sprintf("timelapse_%s_", name)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		fname := entry.Name()
-		if strings.HasPrefix(fname, prefix) && strings.HasSuffix(fname, ".tar.gz") {
-			if err := os.Remove(filepath.Join(packagesDir, fname)); err == nil {
-				deleted++
+
+	packagesDir := "./packages"
+	if entries, err := os.ReadDir(packagesDir); err == nil {
+		prefix := fmt.Sprintf("timelapse_%s_", name)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fname := entry.Name()
+			if strings.HasPrefix(fname, prefix) && strings.HasSuffix(fname, ".tar.gz") {
+				if err := os.Remove(filepath.Join(packagesDir, fname)); err == nil {
+					deleted++
+				}
 			}
 		}
 	}
+
+	timelapseDir := filepath.Join("./timelapse", name)
+	if entries, err := os.ReadDir(timelapseDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if err := os.Remove(filepath.Join(timelapseDir, entry.Name())); err == nil {
+				deleted++
+			}
+		}
+		os.Remove(timelapseDir)
+	}
+
 	return deleted, nil
 }
 
@@ -478,6 +543,9 @@ func main() {
 	cfg, err = loadConfig(cfgPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+	if cfg.Port <= 0 {
+		cfg.Port = 80
 	}
 
 	if cfg.Timelapse.Period <= 0 {
@@ -513,7 +581,6 @@ func main() {
 	defer close(stopChan)
 
 	go startTimelapse(provider, stopChan)
-	go startPackager(stopChan)
 
 	engine := html.NewFileSystem(http.FS(templates.FS), ".gohtml")
 	app := fiber.New(fiber.Config{
@@ -531,6 +598,11 @@ func main() {
 			return c.SendFile(fullPath)
 		}
 
+		fullPath = filepath.Join("./timelapse", path)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			return c.SendFile(fullPath)
+		}
+
 		return c.Status(404).SendString("not found")
 	})
 
@@ -544,6 +616,12 @@ func main() {
 		return c.SendString("OK")
 	})
 
+	app.Get("/api/v1/stats", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"camera_time": provider.Stats(),
+		})
+	})
+
 	app.Get("/api/v1/photo", func(c fiber.Ctx) error {
 		data, err := provider.LatestImage()
 		if err != nil {
@@ -555,24 +633,44 @@ func main() {
 	})
 
 	app.Get("/api/v1/timelapse", func(c fiber.Ctx) error {
-		packagesDir := "./packages"
-		entries, err := os.ReadDir(packagesDir)
-		if err != nil {
-			return c.JSON(fiber.Map{"packages": []string{}})
+		var packages []string
+		if entries, err := os.ReadDir("./packages"); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasPrefix(name, "timelapse_") && strings.HasSuffix(name, ".tar.gz") {
+					packages = append(packages, "/static/"+name)
+				}
+			}
 		}
+		sort.Strings(packages)
 
-		var urls []string
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if strings.HasPrefix(name, "timelapse_") && strings.HasSuffix(name, ".tar.gz") {
-				urls = append(urls, "/static/"+name)
+		var photos []string
+		if groupDirs, err := os.ReadDir("./timelapse"); err == nil {
+			for _, groupDir := range groupDirs {
+				if !groupDir.IsDir() {
+					continue
+				}
+				groupName := groupDir.Name()
+				groupPath := filepath.Join("./timelapse", groupName)
+				if entries, err := os.ReadDir(groupPath); err == nil {
+					for _, entry := range entries {
+						if entry.IsDir() {
+							continue
+						}
+						name := entry.Name()
+						if strings.HasSuffix(strings.ToLower(name), ".jpg") || strings.HasSuffix(strings.ToLower(name), ".jpeg") || strings.HasSuffix(strings.ToLower(name), ".png") {
+							photos = append(photos, "/static/"+filepath.Join(groupName, name))
+						}
+					}
+				}
 			}
 		}
-		sort.Strings(urls)
-		return c.JSON(fiber.Map{"packages": urls})
+		sort.Strings(photos)
+
+		return c.JSON(fiber.Map{"packages": packages, "photos": photos})
 	})
 
 	app.Get("/api/v1/config", func(c fiber.Ctx) error {
@@ -648,5 +746,5 @@ func main() {
 		return c.JSON(fiber.Map{"deleted": deleted})
 	})
 
-	log.Fatal(app.Listen(":80"))
+	log.Fatal(app.Listen(fmt.Sprintf(":%d", cfg.Port)))
 }
